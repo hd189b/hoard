@@ -7,7 +7,7 @@ import * as path from "path";
 
 export { makeNodeHttp } from "./http-node";
 export { CliTransport, generateSshKey } from "./git-cli";
-export { detectLinuxBackends, linuxStore, pickDefault, LINUX_BACKEND_LABEL, LINUX_BACKEND_ORDER } from "./secrets-linux";
+export { createKWallet, detectLinuxBackends, kwalletWallets, linuxStore, pickDefault, LINUX_BACKEND_LABEL, LINUX_BACKEND_ORDER } from "./secrets-linux";
 export type { LinuxBackend } from "./secrets-linux";
 
 export const nodeFs = fs;

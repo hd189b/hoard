@@ -440,3 +440,190 @@ describe("failed deletes", () => {
     expect(phone.file("x.md")).toBeNull();
   });
 });
+
+describe("version list", () => {
+  it("shows re-encrypted copies of the same content once", async () => {
+    const { fileVersions } = await import("../src/core/history");
+    const pc = mk("PC");
+    pc.put("n.md", "A");
+    await pc.sync();
+    pc.mv("n.md", "tmp.md"); // rename away and back: same content, new encryption
+    await pc.sync();
+    pc.mv("tmp.md", "n.md");
+    await pc.sync();
+    pc.put("n.md", "B");
+    await pc.sync();
+    const head = (await pc.repo.head())!;
+    const keys = await (pc.engine as any).d.keys.unlock((await pc.repo.keyFileAt(head))!.keyFile);
+    const vs = await fileVersions(pc.repo, keys, head, "n.md");
+    expect(vs).toHaveLength(2);
+  });
+});
+
+describe("replacing a host's unrelated content", () => {
+  const readmeRepo = (server: string) => {
+    const work = path.join(tmp, "readme-" + server);
+    execFileSync("git", ["init", "-q", "-b", "main", work]);
+    fs.writeFileSync(path.join(work, "README.md"), "# starter readme");
+    execFileSync("git", ["-C", work, "add", "."]);
+    execFileSync("git", ["-C", work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+    execFileSync("git", ["-C", work, "push", "-q", path.join(tmp, server, "vault.git"), "main"]);
+  };
+
+  it("replaces a README-only repo after confirmation, then syncs it like any host", async () => {
+    readmeRepo("s2");
+    const pc = mk("PC");
+    pc.put("a.md", "1");
+    const r1 = await pc.sync();
+    expect(r1.remotes[1].problem).toBe("mismatch");
+    expect(r1.remotes[1].error).toMatch(/Replace with this vault/);
+    const ep = (pc.engine as any).d.endpoints()[1];
+    const info = await pc.engine.inspectForReplace(ep);
+    expect(info.commits).toBe(1);
+    const r2 = await pc.engine.replaceHost(ep, info.head);
+    allAt(pc, r2.head);
+    const phone = mk("Phone");
+    phone.servers = [s2];
+    await phone.sync();
+    expect(phone.file("a.md")).toBe("1");
+  });
+
+  it("never replaces an encrypted vault, or a repo that changed after the check", async () => {
+    const pc = mk("PC");
+    pc.put("a.md", "1");
+    await pc.sync();
+    const ep = (pc.engine as any).d.endpoints()[0];
+    await expect(pc.engine.inspectForReplace(ep)).rejects.toThrow(/holds an encrypted vault/);
+  });
+
+  it("refuses when the repo changed after the check", async () => {
+    readmeRepo("s2");
+    const pc = mk("PC");
+    pc.put("a.md", "1");
+    await pc.sync();
+    const ep = (pc.engine as any).d.endpoints()[1];
+    const info = await pc.engine.inspectForReplace(ep);
+    const work = path.join(tmp, "readme-s2");
+    fs.writeFileSync(path.join(work, "more.md"), "someone pushed");
+    execFileSync("git", ["-C", work, "add", "."]);
+    execFileSync("git", ["-C", work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "more"]);
+    execFileSync("git", ["-C", work, "push", "-q", path.join(tmp, "s2", "vault.git"), "main"]);
+    await expect(pc.engine.replaceHost(ep, info.head)).rejects.toThrow(/changed since you checked/);
+  });
+});
+
+describe("unreliable writes on the device", () => {
+  it("retries writes that come out empty, so every file is complete", async () => {
+    const pc = mk("PC");
+    for (let i = 0; i < 40; i++) pc.put(`n/${i}.md`, `note ${i}`);
+    await pc.sync();
+    const phone = mk("Phone");
+    const real = phone.vault.write.bind(phone.vault);
+    let broken = 0;
+    phone.vault.write = async (p, data, mtime) => {
+      // Like Obsidian for Android: now and then a write leaves an empty file.
+      if (Math.random() < 0.25) {
+        broken++;
+        return real(p, new Uint8Array(0), mtime);
+      }
+      return real(p, data, mtime);
+    };
+    await phone.sync();
+    expect(broken).toBeGreaterThan(0);
+    for (let i = 0; i < 40; i++) expect(phone.file(`n/${i}.md`)).toBe(`note ${i}`);
+  });
+
+  it("stops instead of recording a write that never succeeds", async () => {
+    const pc = mk("PC");
+    pc.put("a.md", "content");
+    await pc.sync();
+    const phone = mk("Phone");
+    const real = phone.vault.write.bind(phone.vault);
+    phone.vault.write = async (p, _d, m) => real(p, new Uint8Array(0), m);
+    await expect(phone.sync()).rejects.toThrow(/Couldn't write "a.md" correctly/);
+    phone.vault.write = real;
+    await phone.sync();
+    expect(phone.file("a.md")).toBe("content");
+  });
+
+  it("repairs a file left empty by an earlier version, without uploading the empty file", async () => {
+    const pc = mk("PC");
+    pc.put("a.md", "precious content");
+    await pc.sync();
+    const phone = mk("Phone");
+    await phone.sync();
+    // Simulate the old bug: file emptied on disk, and the state recorded that empty size as correct.
+    fs.writeFileSync(path.join(phone.vaultDir, "a.md"), "");
+    const st = fs.statSync(path.join(phone.vaultDir, "a.md"));
+    const stateFile = path.join(phone.root, "state.json");
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    state.files["a.md"] = { ...state.files["a.md"], s: 0, t: Math.floor(st.mtimeMs) };
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+    const r = await phone.sync();
+    expect(r.repaired).toEqual(["a.md"]);
+    expect(r.committedLocal).toBe(false);
+    expect(phone.file("a.md")).toBe("precious content");
+    await pc.sync();
+    expect(pc.file("a.md")).toBe("precious content");
+  });
+});
+
+describe("damaged local Git repo", () => {
+  it("repo writes that come out empty are retried", async () => {
+    let broken = 0;
+    const flaky = {
+      promises: {
+        ...fs.promises,
+        writeFile: async (p: string, d: any, ...r: any[]) => {
+          if (/objects\/[0-9a-f]{2}\//.test(p) && Math.random() < 0.2) {
+            broken++;
+            return fs.promises.writeFile(p, new Uint8Array(0));
+          }
+          return (fs.promises.writeFile as any)(p, d, ...r);
+        },
+      },
+    };
+    const pc = mk("PC", { repoFs: flaky } as any);
+    for (let i = 0; i < 30; i++) pc.put(`n${i}.md`, `note ${i}`);
+    await pc.sync();
+    pc.put("n1.md", "changed");
+    await pc.sync();
+    expect(broken).toBeGreaterThan(0);
+    const phone = mk("Phone");
+    await phone.sync();
+    expect(phone.file("n1.md")).toBe("changed");
+    expect(phone.file("n29.md")).toBe("note 29");
+  });
+
+  it("a repo with an empty object repairs itself from a host and keeps local edits", async () => {
+    const pc = mk("PC");
+    const phone = mk("Phone");
+    pc.put("a.md", "1");
+    await pc.sync();
+    await phone.sync();
+    // Phone works offline: local commit only.
+    s1.down = true;
+    s2.down = true;
+    phone.put("a.md", "offline edit");
+    phone.put("new.md", "written offline");
+    await phone.sync();
+    s1.down = false;
+    s2.down = false;
+    // Damage one object of that offline commit, like Obsidian for Android did.
+    const head = (await phone.repo.head())!;
+    const { execFileSync: x } = await import("child_process");
+    const tree = x("git", ["--git-dir", phone.repo.gitdir, "cat-file", "-p", head]).toString().match(/^tree (\w+)/)![1];
+    const f = path.join(phone.repo.gitdir, "objects", tree.slice(0, 2), tree.slice(2));
+    fs.chmodSync(f, 0o644);
+    fs.writeFileSync(f, "");
+    // Meanwhile the PC edits something else.
+    pc.put("pc.md", "from pc");
+    await pc.sync();
+    const r = await phone.sync();
+    expect(r.repoRepaired).toBe(true);
+    expect(r.remotes.every((x) => x.upToDate)).toBe(true);
+    await pc.sync();
+    expect(pc.files()).toEqual({ "a.md": "offline edit", "new.md": "written offline", "pc.md": "from pc" });
+    expect(phone.files()).toEqual(pc.files());
+  });
+});

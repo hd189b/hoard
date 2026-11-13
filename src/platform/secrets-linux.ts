@@ -83,15 +83,47 @@ async function busNames(): Promise<Set<string>> {
   return out;
 }
 
+const KWALLETD = ["kwalletd6", "kwalletd5"];
+
+/** Names of existing KWallet wallets, without opening (or prompting for) any. Null if KWallet isn't running/activatable. */
+export async function kwalletWallets(): Promise<{ service: string; wallets: string[] } | null> {
+  for (const d of KWALLETD) {
+    const r = await run("dbus-send", ["--session", "--print-reply", `--dest=org.kde.${d}`, `/modules/${d}`, "org.kde.KWallet.wallets"], undefined, 10000);
+    if (r.code === 0) return { service: d, wallets: [...r.out.matchAll(/string "([^"]+)"/g)].map((m) => m[1]) };
+  }
+  return null;
+}
+
+/**
+ * Ask KWallet to open the default wallet. If it doesn't exist, KWallet shows its own
+ * window to create it (the user picks the wallet password there). True when it's ready.
+ */
+export async function createKWallet(): Promise<boolean> {
+  const kw = await kwalletWallets();
+  if (!kw) throw new Error("KWallet isn't available in this session");
+  const name = kwalletName();
+  const r = await run(
+    "dbus-send",
+    ["--session", "--print-reply", "--reply-timeout=300000", `--dest=org.kde.${kw.service}`, `/modules/${kw.service}`, "org.kde.KWallet.open", `string:${name}`, "int64:0", "string:Encgidian"],
+    undefined,
+    310000,
+  );
+  const m = r.out.match(/int32\s+(-?\d+)/);
+  return r.code === 0 && !!m && Number(m[1]) >= 0;
+}
+
 export interface Detection {
   available: LinuxBackend[];
   /** Why each missing backend is missing. */
   notes: Partial<Record<LinuxBackend, string>>;
+  /** KWallet runs but has no wallet yet (one can be created). */
+  kwalletNeedsWallet?: boolean;
 }
 
 export async function detectLinuxBackends(readComm: (pid: string) => string = procName): Promise<Detection> {
   const notes: Detection["notes"] = {};
   const available: LinuxBackend[] = [];
+  let noWallet = false;
   const [secretTool, kwq, owner, names] = await Promise.all([has("secret-tool"), has("kwallet-query"), secretServiceOwner(readComm), busNames()]);
 
   if (owner && /keepassxc/i.test(owner)) {
@@ -101,15 +133,24 @@ export async function detectLinuxBackends(readComm: (pid: string) => string = pr
     notes.keepassxc = "KeePassXC isn't running with Secret Service integration turned on";
   }
 
-  if (kwq && (names.has("org.kde.kwalletd6") || names.has("org.kde.kwalletd5") || names.has("org.kde.kwalletd"))) available.push("kwallet");
-  else notes.kwallet = kwq ? "KWallet isn't available in this session" : "kwallet-query isn't installed";
+  if (kwq && (names.has("org.kde.kwalletd6") || names.has("org.kde.kwalletd5") || names.has("org.kde.kwalletd"))) {
+    const kw = await kwalletWallets();
+    if (kw && kw.wallets.includes(kwalletName())) available.push("kwallet");
+    else {
+      notes.kwallet = `KWallet has no wallet named “${kwalletName()}” yet. Use “Create KWallet wallet” to make one.`;
+      noWallet = true;
+    }
+  } else notes.kwallet = kwq ? "KWallet isn't available in this session" : "kwallet-query isn't installed";
 
-  const otherOwner = owner && !/keepassxc/i.test(owner);
+  // KWallet 6 also serves the Secret Service interface (ksecretd); that is KWallet, not a separate keyring.
+  const ownerIsKWallet = !!owner && /ksecretd|kwalletd/i.test(owner);
+  const otherOwner = owner && !/keepassxc/i.test(owner) && !ownerIsKWallet;
   if (secretTool && (otherOwner || (!owner && names.has("org.freedesktop.secrets")))) available.push("gnome");
+  else if (ownerIsKWallet) notes.gnome = "The Secret Service here is provided by KWallet; use the KWallet option";
   else notes.gnome = secretTool ? "No Secret Service keyring found" : "secret-tool (libsecret) isn't installed";
 
   available.push("plaintext");
-  return { available, notes };
+  return { available, notes, kwalletNeedsWallet: noWallet };
 }
 
 export function pickDefault(d: Detection): LinuxBackend {
@@ -168,7 +209,9 @@ class KWalletStore implements SecretStore {
   async get(key: string) {
     const r = await run("kwallet-query", ["-f", "encgidian", "-r", this.entry(key), this.wallet], undefined, 60000);
     if (r.code !== 0) {
-      if (/not found|does not exist|no such/i.test(r.err + r.out)) return null;
+      if (/Wallet .* not found/i.test(r.err + r.out)) throw new Error(`KWallet has no wallet “${this.wallet}” yet; create it from the plugin settings`);
+      // Real kwallet-query says "Failed to read entry … value" for a missing entry.
+      if (/not found|does not exist|no such|Failed to read entry/i.test(r.err + r.out)) return null;
       throw new Error(`KWallet: ${(r.err || r.out).trim() || "could not read (is the wallet open?)"}`);
     }
     const v = r.out.replace(/\n$/, "");

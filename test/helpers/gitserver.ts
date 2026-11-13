@@ -14,6 +14,8 @@ export class GitServer {
   /** When set, requests must carry these Basic credentials. */
   auth?: { username: string; password: string };
   requests = 0;
+  /** Credentials are right, but the account may not use this repo (like a token without access). */
+  forbidden = false;
 
   constructor(readonly root: string) {
     mkdirSync(root, { recursive: true });
@@ -68,6 +70,11 @@ export class GitServer {
         return;
       }
       user = u;
+      if (this.forbidden) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("Write access to repository not granted.");
+        return;
+      }
     }
     const u = new URL(req.url ?? "/", "http://x");
     const env: Record<string, string> = {

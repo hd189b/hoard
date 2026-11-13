@@ -9,7 +9,7 @@ is in [SPEC.md](SPEC.md).
 
 ```bash
 npm install
-npm test                 # 63 tests: two devices, real Git servers, SSH, proxies
+npm test                 # 75 tests: two devices, real Git servers, SSH, proxies
 npm run build            # plugin -> dist/plugin/{main.js,manifest.json}
 npm run build:decrypter  # dist/decrypter/encgidian-decrypt(.exe)
 ```
@@ -61,6 +61,32 @@ device while the note was open, synced deletes, restoring an older version and
 a deleted file, a host going down and catching up, lock/unlock, sync after
 edits, and that no secrets or readable names end up on disk or on the hosts.
 
-Not yet tested: on Android, on Windows (SSH askpass, Git Credential Manager,
-`connect.exe` proxy), real KeePassXC / KWallet / GNOME Keyring, and Sign in
-with GitHub (needs your OAuth client ID).
+Tested by hand in Obsidian 1.15.1 for Android (emulator, Android 17, driven
+over adb and the WebView debugger): plugin loads without Node modules, settings
+on a phone screen, tokens in Obsidian's secret storage, joining an existing
+vault, a real desktop-vs-Android conflict and delete-vs-edit (both vaults ended
+up identical), restore picker, remembered key across an app restart.
+Note: Obsidian saves its secret storage with a short delay; if the app is killed
+within seconds of unlocking, you're asked for the password once more.
+
+Tested for real between Obsidian 1.15.1 on Linux (the user's own install,
+KWallet for secrets) and Obsidian for Android (emulator), syncing through
+GitHub and GitLab: 305-note vault set up and joined (~19 s on the phone),
+edits on both sides, same-note conflict, delete vs edit, folder rename vs edit
+(both directions), a photo from the phone, the phone offline (airplane mode)
+then back, GitHub blocked for Linux only (the phone forwarded the change),
+password change, replacing a GitLab starter README, and the decrypter reading
+the real history with the password and the recovery key. After every round the
+two vaults were compared by SHA-256 and were identical.
+
+Problems found that way and fixed: Obsidian for Android occasionally writes a
+file as empty (notes and Git objects); every write is now read back and
+retried, damaged files are restored from the encrypted copy, and a damaged
+local repo rebuilds itself from a host. Also: secret ids over Obsidian's
+64-character limit, KWallet without a wallet, KWallet's own Secret Service
+mistaken for GNOME Keyring, missing KWallet entries treated as errors, vague
+sign-in errors (now: wrong token vs. token without access to the repo).
+
+Not yet tested: a physical Android phone, Windows (SSH askpass, Git Credential
+Manager, `connect.exe` proxy), KeePassXC, and Sign in with GitHub (needs your
+OAuth client ID).

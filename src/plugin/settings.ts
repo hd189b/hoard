@@ -67,7 +67,8 @@ export function newRemote(): RemoteConfig {
 }
 
 export const secretKeys = {
-  vaultKey: (vaultId: string) => `vault-key-${vaultId}`,
+  // Kept short: Obsidian secret ids are limited to 64 characters (see secret-obsidian.ts).
+  vaultKey: (vaultId: string) => `vault-key-${vaultId.slice(0, 20)}`,
   remoteSecret: (remoteId: string) => `remote-${remoteId}-secret`,
   sshPassphrase: (remoteId: string) => `remote-${remoteId}-sshpass`,
 };

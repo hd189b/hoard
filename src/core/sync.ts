@@ -1,6 +1,7 @@
 // The sync engine: scan the vault, commit local changes, fetch from every host,
 // merge, update the vault, and bring every host up to the merged commit.
 
+import { bytesEqual } from "./bytes";
 import { contentHash, decryptObject, encryptObject, Entry, fileId, Manifest, normalizePath } from "./format";
 import { FilterOptions, isExcluded } from "./filter";
 import { changePassword, KeyFile, serializeKeyFile, VaultKeys, WrongPasswordError } from "./keys";
@@ -80,7 +81,17 @@ export interface SyncReport {
   lateConflicts: Conflict[];
   clashes: { from: string; to: string }[];
   renamedLocal: { from: string; to: string }[];
+  /** Files that were found damaged on this device and restored from the encrypted copy. */
+  repaired: string[];
+  /** The local repository was damaged and rebuilt from a host's copy. */
+  repoRepaired?: boolean;
   remotes: RemoteStatus[];
+}
+
+/** Errors that mean an object in the local repo is damaged or missing. */
+export function isRepoDamage(e: unknown): boolean {
+  const m = String((e as Error)?.message ?? e);
+  return /Invalid compressed buffer|incorrect header check|invalid (stored block|distance|code)|unexpected end of (file|data)|object corrupt|Could not find [0-9a-f]{7,40}|ReadObjectFail|Expected type/i.test(m);
 }
 
 export class VaultMismatchError extends Error {
@@ -147,7 +158,84 @@ export class SyncEngine {
     return this.running;
   }
 
+  /**
+   * Describe what a host holds, for the "Replace with this vault" confirmation.
+   * Refuses hosts that hold an encrypted vault (this one or another).
+   */
+  async inspectForReplace(ep: Endpoint): Promise<{ commits: number; head: string }> {
+    const { repo } = this.d;
+    await repo.init();
+    const head = await this.d.transportFor(ep).fetch(ep);
+    if (!head) throw new Error("This repository is empty; a normal sync sets it up, nothing needs replacing");
+    if (await repo.keyFileAt(head).catch(() => null)) throw new Error("This repository holds an encrypted vault; it will not be replaced");
+    return { commits: (await repo.log(head)).length, head };
+  }
+
+  /**
+   * Overwrite a host that holds unrelated content with this device's vault, then sync.
+   * Only call after the user confirmed. `expectedHead` guards against the host changing meanwhile.
+   */
+  async replaceHost(ep: Endpoint, expectedHead: string): Promise<SyncReport> {
+    while (this.running) await this.running.catch(() => {});
+    const p = (async () => {
+      const { repo } = this.d;
+      const local = await repo.head();
+      if (!local || !(await repo.keyFileAt(local))) {
+        throw new Error("Sync this device with another host first, so there is a vault to put on this one");
+      }
+      const now = await this.d.transportFor(ep).fetch(ep);
+      if (now !== expectedHead) throw new Error("The repository changed since you checked it; press Test again");
+      if (now && (await repo.keyFileAt(now).catch(() => null))) throw new Error("This repository holds an encrypted vault; it will not be replaced");
+      await this.d.transportFor(ep).push(ep, local, { force: true });
+      return this.run();
+    })();
+    this.running = p.finally(() => {
+      this.running = null;
+    });
+    return this.running;
+  }
+
+  /** Run a sync; if the local repo turns out to be damaged, repair it once and try again. */
   private async run(): Promise<SyncReport> {
+    try {
+      return await this.runOnce();
+    } catch (e) {
+      if (!isRepoDamage(e)) throw e;
+      await this.repairRepo();
+      const r = await this.runOnce();
+      r.repoRepaired = true;
+      return r;
+    }
+  }
+
+  /**
+   * The local repo has a damaged object. Its notes on disk are fine, so go back to the
+   * newest intact copy fetched from a host and let the next scan rebuild local changes.
+   */
+  private async repairRepo(): Promise<void> {
+    const { repo } = this.d;
+    repo.clearCaches();
+    let best: { oid: string; time: number } | null = null;
+    for (const ep of this.d.endpoints()) {
+      const oid = await repo.remoteHead(ep.id);
+      if (!oid) continue;
+      try {
+        if (!(await repo.keyFileAt(oid))) continue;
+        const { time } = await repo.readCommit(oid);
+        if (!best || time > best.time) best = { oid, time };
+      } catch {
+        /* this copy is damaged too */
+      }
+    }
+    if (best) await repo.setHead(best.oid);
+    else await repo.deleteHead();
+    // Forget what we believed was on disk so every file is checked again.
+    const state = await this.d.state.load();
+    state.files = {};
+    await this.d.state.save(state);
+  }
+
+  private async runOnce(): Promise<SyncReport> {
     const { repo } = this.d;
     const opt = this.d.options();
     const now = this.d.now?.() ?? new Date();
@@ -179,7 +267,12 @@ export class SyncEngine {
           const kf = await repo.keyFileAt(h).catch((e) => {
             throw new VaultMismatchError(`Not an encgidian vault: ${e.message}`);
           });
-          if (!kf) throw new VaultMismatchError("This repository has other content and is not an encgidian vault");
+          if (!kf) {
+            throw new VaultMismatchError(
+              "This repository has other content and is not an encrypted vault, so it was left untouched. " +
+                "If it only holds starter files (like a README), press Test in this host's settings and choose “Replace with this vault”.",
+            );
+          }
           if (identity && kf.keyFile.vaultId !== identity.keyFile.vaultId) {
             throw new VaultMismatchError("This repository holds a different vault; it was left untouched");
           }
@@ -187,6 +280,7 @@ export class SyncEngine {
         }
         heads.set(ep.id, h);
       } catch (e) {
+        if (isRepoDamage(e)) throw e; // repaired by run()
         fail(ep, e);
       }
     };
@@ -296,6 +390,7 @@ export class SyncEngine {
               st.pushed = true;
               st.upToDate = true;
             } catch (e) {
+              if (isRepoDamage(e)) throw e; // repaired by run()
               if (e instanceof PushRejectedError && round < MAX_PUSH_ROUNDS - 1) rejected.push(ep);
               else fail(ep, e);
             }
@@ -317,6 +412,7 @@ export class SyncEngine {
       lateConflicts,
       clashes,
       renamedLocal: scan.renamed,
+      repaired: scan.repaired,
       remotes: [...status.values()],
     };
   }
@@ -362,6 +458,7 @@ export class SyncEngine {
     for (const [p, e] of headM) if (isExcluded(p, e.s, opt)) manifest.set(p, e);
 
     let changed = false;
+    const repaired: string[] = [];
     const seen = new Set<string>();
     for (const f of files) {
       if (isExcluded(f.path, f.size, opt)) continue;
@@ -369,6 +466,15 @@ export class SyncEngine {
       const he = headM.get(f.path);
       const cached = state.files[f.path];
       if (he && cached && cached.s === f.size && cached.t === f.mtime && cached.h === he.h) {
+        if (f.size !== he.s) {
+          // We recorded writing this exact content, the file hasn't been touched since,
+          // yet its size is wrong: an earlier write went bad. Restore it instead of
+          // mistaking the damaged file for an edit.
+          const good = await decryptObject(keys, he.p, he.i, await repo.readBlob(he.o));
+          const st = await this.writeVerified(f.path, good, he.t);
+          state.files[f.path] = { s: st.size, t: st.mtime, h: he.h };
+          repaired.push(f.path);
+        }
         manifest.set(f.path, he);
         continue;
       }
@@ -386,7 +492,23 @@ export class SyncEngine {
     }
     for (const p of Object.keys(state.files)) if (!seen.has(p)) delete state.files[p];
     for (const p of headM.keys()) if (!manifest.has(p)) changed = true;
-    return { manifest, changed, renamed };
+    return { manifest, changed, renamed, repaired };
+  }
+
+  /**
+   * Write a file and read it back. Some platforms occasionally leave a file empty
+   * (seen on Obsidian for Android), so never trust a write without checking it.
+   */
+  private async writeVerified(path: string, data: Uint8Array, mtime: number): Promise<{ size: number; mtime: number }> {
+    const { vault } = this.d;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await vault.write(path, data, attempt === 0 ? mtime : 0);
+      const back = await vault.read(path).catch(() => null);
+      const st = await vault.stat(path);
+      if (back && st && bytesEqual(back, data)) return st;
+      await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+    }
+    throw new Error(`Couldn't write "${path}" correctly on this device (it read back different); the sync was stopped so nothing is lost. Try again.`);
   }
 
   /** Re-encrypt entries that moved to a new path (conflict copies, renames, clashes). */
@@ -479,11 +601,8 @@ export class SyncEngine {
           asConflict();
         }
       }
-      await vault.write(target, data, e.t);
-      if (target === p) {
-        const st = await vault.stat(p);
-        if (st) state.files[p] = { s: st.size, t: st.mtime, h: e.h };
-      }
+      const st = await this.writeVerified(target, data, e.t);
+      if (target === p) state.files[p] = { s: st.size, t: st.mtime, h: e.h };
       n++;
     }
     return n;

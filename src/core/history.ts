@@ -30,7 +30,16 @@ export async function fileVersions(repo: Repo, keys: VaultKeys, head: string, pa
       order.push(e.o);
     }
   }
-  return order.map((o) => byObj.get(o)!).sort((a, b) => b.time - a.time);
+  // The same content can be stored more than once (re-encrypted after a rename,
+  // a restore, or a delete and re-add). Merge neighbours with identical content,
+  // keeping the time it first appeared.
+  const sorted = order.map((o) => byObj.get(o)!).sort((a, b) => b.time - a.time);
+  const out: Version[] = [];
+  for (const v of sorted) {
+    if (out.length && out[out.length - 1].entry.h === v.entry.h) out[out.length - 1] = v;
+    else out.push(v);
+  }
+  return out;
 }
 
 export interface DeletedFile {

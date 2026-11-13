@@ -21,6 +21,63 @@ export type GitFs = any;
 
 export const AUTHOR = { name: "encgidian", email: "sync@invalid" };
 
+const LOOSE_OBJECT = /\/objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/;
+const OBJECT_FILE = /\/objects\/([0-9a-f]{2}\/[0-9a-f]{38}|pack\/[^/]+)$/;
+
+function enoent(path: string): Error {
+  const e = new Error(`ENOENT: ${path}`) as Error & { code: string };
+  e.code = "ENOENT";
+  return e;
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * Wrap the file system used for the Git repo:
+ *  - every object written is read back and compared (some platforms, notably
+ *    Obsidian for Android, occasionally leave a written file empty);
+ *  - an empty loose-object file counts as missing (a real Git object is never
+ *    empty), so it gets written again instead of being trusted.
+ */
+export function guardedFs(raw: GitFs): GitFs {
+  if (raw.__encgidianGuarded) return raw;
+  const p = raw.promises;
+  const isEmptyLoose = async (path: string) => {
+    if (!LOOSE_OBJECT.test(path)) return false;
+    try {
+      return (await p.stat(path)).size === 0;
+    } catch {
+      return false;
+    }
+  };
+  const promises = {
+    ...p,
+    async stat(path: string, ...rest: unknown[]) {
+      if (await isEmptyLoose(path)) throw enoent(path);
+      return p.stat(path, ...rest);
+    },
+    async lstat(path: string, ...rest: unknown[]) {
+      if (await isEmptyLoose(path)) throw enoent(path);
+      return p.lstat(path, ...rest);
+    },
+    async readFile(path: string, ...rest: unknown[]) {
+      if (await isEmptyLoose(path)) throw enoent(path);
+      return p.readFile(path, ...rest);
+    },
+    async writeFile(path: string, data: Uint8Array | string, ...rest: unknown[]) {
+      if (!OBJECT_FILE.test(path) || typeof data === "string") return p.writeFile(path, data, ...rest);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await p.writeFile(path, data, ...rest);
+        const back = await p.readFile(path).catch(() => null);
+        if (back && sameBytes(new Uint8Array(back), data)) return;
+        await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+      }
+      throw new Error(`Couldn't save ${path.slice(path.lastIndexOf("/objects/") + 1)} correctly on this device; the sync was stopped. Try again.`);
+    },
+  };
+  return { promises, __encgidianGuarded: true };
+}
+
 interface TreeEntry {
   mode: string;
   path: string;
@@ -44,10 +101,22 @@ export class Repo {
   /** canonical shard text -> o/<xx> tree oid */
   private readonly canonToObjTree = new Map<string, string>();
 
+  readonly fs: GitFs;
+
   constructor(
-    readonly fs: GitFs,
+    rawFs: GitFs,
     readonly gitdir: string,
-  ) {}
+  ) {
+    this.fs = guardedFs(rawFs);
+  }
+
+  /** Drop caches (after the repo was repaired). */
+  clearCaches(): void {
+    for (const k of Object.keys(this.cache)) delete (this.cache as Record<string, unknown>)[k];
+    this.shardCache.clear();
+    this.canonToBlob.clear();
+    this.canonToObjTree.clear();
+  }
 
   private get g() {
     return { fs: this.fs, gitdir: this.gitdir, cache: this.cache };
@@ -77,6 +146,10 @@ export class Repo {
 
   async setHead(oid: string): Promise<void> {
     await git.writeRef({ fs: this.fs, gitdir: this.gitdir, ref: `refs/heads/${BRANCH}`, value: oid, force: true });
+  }
+
+  async deleteHead(): Promise<void> {
+    await git.deleteRef({ fs: this.fs, gitdir: this.gitdir, ref: `refs/heads/${BRANCH}` }).catch(() => {});
   }
 
   static remoteRef(remoteId: string): string {

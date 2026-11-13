@@ -17,7 +17,7 @@ function fake(name: string, body: string) {
 }
 
 /** Simulate a session: which program owns org.freedesktop.secrets, and which bus names exist. */
-function session(o: { owner?: string; names?: string[]; secretTool?: boolean; kwallet?: boolean }) {
+function session(o: { owner?: string; names?: string[]; secretTool?: boolean; kwallet?: boolean; wallets?: string[] }) {
   fs.rmSync(path.join(tmp, "bin"), { recursive: true, force: true });
   fs.mkdirSync(path.join(tmp, "bin"));
   for (const b of ["sh", "cat", "grep", "printf", "sed", "rm", "mkdir", "touch", "test", "["]) {
@@ -32,6 +32,7 @@ function session(o: { owner?: string; names?: string[]; secretTool?: boolean; kw
     `case "$*" in
   *GetConnectionUnixProcessID*) ${ownerPid ? `echo "   uint32 ${ownerPid}"` : 'echo "Error NameHasNoOwner" >&2; exit 1'} ;;
   *ListNames*|*ListActivatableNames*) for n in ${(o.names ?? []).join(" ")}; do echo "      string \\"$n\\""; done ;;
+  *KWallet.wallets*) ${o.names?.some((n) => n.includes("kwalletd")) ? "" : "exit 1;"} echo "   array ["; for w in ${(o.wallets ?? ["kdewallet"]).join(" ")}; do echo "      string \\"$w\\""; done; echo "   ]" ;;
 esac`,
   );
   if (o.secretTool) {
@@ -46,7 +47,7 @@ case $cmd in store) cat > "$f";; lookup) test -f "$f" && cat "$f" || exit 1;; cl
     fake(
       "kwallet-query",
       `mode=$3; key=$4; f="${store}/kw_$(printf %s "$key" | sed 's/[^a-zA-Z0-9]/_/g')"
-case $mode in -w) cat > "$f";; -r) test -f "$f" && cat "$f" || { echo "The folder does not exist"; exit 1; };; esac`,
+case $mode in -w) cat > "$f";; -r) test -f "$f" && cat "$f" || { echo "Failed to read entry $key value from the kdewallet wallet." >&2; exit 1; };; esac`,
     );
   }
   process.env.PATH = path.join(tmp, "bin");
@@ -90,6 +91,23 @@ describe("Linux secret backend detection order", () => {
     expect(d.available).toEqual(["plaintext"]);
     expect(pickDefault(d)).toBe("plaintext");
     expect(d.notes.keepassxc).toMatch(/KeePassXC/);
+  });
+});
+
+describe("KWallet without a wallet", () => {
+  it("isn't picked when no wallet exists yet, and says how to fix it", async () => {
+    session({ names: ["org.kde.kwalletd6"], kwallet: true, wallets: [] });
+    const d = await detectLinuxBackends();
+    expect(d.available).toEqual(["plaintext"]);
+    expect(d.kwalletNeedsWallet).toBe(true);
+    expect(d.notes.kwallet).toMatch(/no wallet/);
+  });
+
+  it("doesn't mistake KWallet's own Secret Service (ksecretd) for GNOME Keyring", async () => {
+    session({ owner: "ksecretd", names: ["org.kde.kwalletd6"], secretTool: true, kwallet: true, wallets: [] });
+    const d = await detectLinuxBackends(() => "ksecretd");
+    expect(d.available).toEqual(["plaintext"]);
+    expect(d.notes.gnome).toMatch(/provided by KWallet/);
   });
 });
 

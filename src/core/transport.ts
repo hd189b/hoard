@@ -33,6 +33,16 @@ export class PushRejectedError extends Error {
   }
 }
 
+export class ProtectedBranchError extends Error {
+  constructor(hostMessage: string) {
+    super(
+      `The host refused to overwrite its protected branch (${hostMessage.trim().slice(0, 160)}). ` +
+        `Allow force-push on "main" in the repository's settings, replace, then protect it again.`,
+    );
+    this.name = "ProtectedBranchError";
+  }
+}
+
 export class AuthError extends Error {
   constructor(msg = "Sign-in was rejected by the host") {
     super(msg);
@@ -43,8 +53,11 @@ export class AuthError extends Error {
 export interface Transport {
   /** Fetch the remote branch into refs/remotes/<id>/main. Returns its commit, or null if the remote is empty. */
   fetch(ep: Endpoint): Promise<string | null>;
-  /** Push local main to the remote. Throws PushRejectedError when the remote moved on. */
-  push(ep: Endpoint, oid: string): Promise<void>;
+  /**
+   * Push local main to the remote. Throws PushRejectedError when the remote moved on.
+   * `force` replaces whatever the remote branch holds (only used after the user confirms).
+   */
+  push(ep: Endpoint, oid: string, opts?: { force?: boolean }): Promise<void>;
 }
 
 export function isSshUrl(url: string): boolean {
@@ -78,18 +91,29 @@ export function scrub(msg: string, creds?: Credentials): string {
 /** Turn low-level connection errors into a sentence a person can act on. */
 export function friendlyNetworkError(msg: string): string {
   if (/ECONNREFUSED|Connection refused|Failed to connect/i.test(msg)) return `Can't reach the host: the connection was refused (${msg.split("\n")[0]})`;
-  if (/ENOTFOUND|EAI_AGAIN|Could not resolve host/i.test(msg)) return "Can't reach the host: its name couldn't be looked up (offline, or a typo in the URL?)";
+  if (/ENOTFOUND|EAI_AGAIN|Could not resolve host|UnknownHostException|Unable to resolve host/i.test(msg)) return "Can't reach the host: its name couldn't be looked up (offline, or a typo in the URL?)";
   if (/ETIMEDOUT|Timed out|timeout/i.test(msg)) return "Can't reach the host: the connection timed out";
-  if (/socket hang up|ECONNRESET|connection reset|closed the connection|unexpected disconnect/i.test(msg)) return "Can't reach the host: the connection was dropped";
+  if (/socket hang up|ECONNRESET|connection reset|closed the connection|unexpected disconnect|SocketException|ConnectException|SSLException/i.test(msg)) return "Can't reach the host: the connection was dropped";
   if (/certificate|SSL|TLS/i.test(msg)) return `Secure connection failed (${msg.split("\n")[0]})`;
   return msg;
 }
 
+/** A sign-in failure explained: wrong credentials (401) vs. not allowed on this repo (403). */
+export function authProblem(status: number | undefined, hostMessage: string, creds?: Credentials): AuthError {
+  const why = scrub(hostMessage.replace(/\s+/g, " ").trim(), creds).slice(0, 200);
+  if (status === 403) {
+    return new AuthError(
+      `Signed in, but this token isn't allowed to use this repository; it needs read and write access to it` + (why ? ` (host says: ${why})` : ""),
+    );
+  }
+  return new AuthError(`Sign-in was rejected: the token or password is wrong or has expired` + (why ? ` (host says: ${why})` : ""));
+}
+
 function asError(e: unknown, creds?: Credentials): Error {
-  const err = e as { code?: string; message?: string; data?: { statusCode?: number } };
+  const err = e as { code?: string; message?: string; data?: { statusCode?: number; response?: string } };
   const status = err?.data?.statusCode;
   const msg = scrub(String(err?.message ?? e), creds);
-  if (err?.code === "HttpError" && (status === 401 || status === 403)) return new AuthError();
+  if (err?.code === "HttpError" && (status === 401 || status === 403)) return authProblem(status, String(err.data?.response ?? ""), creds);
   if (err?.code === "PushRejectedError") return new PushRejectedError();
   const out = new Error(friendlyNetworkError(msg));
   out.name = err?.code ?? "Error";
@@ -111,7 +135,9 @@ export class IsoTransport implements Transport {
       },
       onAuthFailure: () => {
         tries++;
-        return { cancel: true as const };
+        // Returning nothing stops retries; isomorphic-git then throws the HttpError
+        // with the status code and the host's explanation, which asError turns into a message.
+        return undefined;
       },
       get failed() {
         return tries > 0;
@@ -168,8 +194,9 @@ export class IsoTransport implements Transport {
       await this.repo.setRemoteHead(ep.id, remote.oid);
       return remote.oid;
     } catch (e) {
-      if (hooks.failed) throw new AuthError();
-      throw asError(e, creds);
+      const out = asError(e, creds);
+      if (hooks.failed && !(out instanceof AuthError)) throw new AuthError();
+      throw out;
     }
   }
 
@@ -182,7 +209,7 @@ export class IsoTransport implements Transport {
     }
   }
 
-  async push(ep: Endpoint, oid: string): Promise<void> {
+  async push(ep: Endpoint, oid: string, opts: { force?: boolean } = {}): Promise<void> {
     const creds = await ep.getCredentials();
     checkUrlSafety(ep.url, !!creds?.password);
     const hooks = this.authHooks(creds);
@@ -199,16 +226,19 @@ export class IsoTransport implements Transport {
         remote: ep.id,
         ref: BRANCH,
         remoteRef: BRANCH,
+        force: !!opts.force,
         onAuth: hooks.onAuth,
         onAuthFailure: hooks.onAuthFailure,
       });
     } catch (e) {
-      if (hooks.failed) throw new AuthError();
-      throw asError(e, creds);
+      const out = asError(e, creds);
+      if (hooks.failed && !(out instanceof AuthError)) throw new AuthError();
+      throw out;
     }
     const refErr = res.refs?.[`refs/heads/${BRANCH}`];
     if (!res.ok || (refErr && !refErr.ok)) {
       const why = refErr?.error ?? res.error ?? "push failed";
+      if (/protected branch|pre-receive hook declined|not allowed to force push/i.test(why)) throw new ProtectedBranchError(why);
       if (/non-fast-forward|fetch first|rejected|stale/i.test(why)) throw new PushRejectedError();
       throw new Error(scrub(why, creds));
     }

@@ -3,6 +3,13 @@
 import type { App } from "obsidian";
 import type { SecretStore } from "../core/secrets";
 
+/** Obsidian accepts lowercase letters, digits and dashes, at most 64 characters. */
+export function obsidianSecretId(ns: string, key: string): string {
+  const id = `encgidian-${ns}-${key}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  if (id.length > 64) throw new Error(`internal: secret id too long (${id.length} > 64): ${key}`);
+  return id;
+}
+
 export class ObsidianSecretStore implements SecretStore {
   readonly kind = "obsidian";
   readonly label = "Obsidian secret storage";
@@ -12,7 +19,7 @@ export class ObsidianSecretStore implements SecretStore {
   ) {}
 
   private id(key: string) {
-    return `encgidian-${this.ns}-${key}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    return obsidianSecretId(this.ns, key);
   }
 
   private store() {

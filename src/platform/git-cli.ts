@@ -10,7 +10,7 @@ import { promises as fsp } from "fs";
 import * as path from "path";
 import { BRANCH } from "../core/format";
 import { Repo } from "../core/repo";
-import { AuthError, checkUrlSafety, friendlyNetworkError, Credentials, Endpoint, isSshUrl, PushRejectedError, scrub, Transport } from "../core/transport";
+import { AuthError, authProblem, checkUrlSafety, friendlyNetworkError, ProtectedBranchError, Credentials, Endpoint, isSshUrl, PushRejectedError, scrub, Transport } from "../core/transport";
 
 export interface CliOptions {
   /** Path to git; default "git". */
@@ -116,9 +116,12 @@ export class CliTransport implements Transport {
         clearTimeout(timer);
         if (code === 0) return resolve(out);
         const msg = scrub(err.trim() || `git exited with ${code}`, creds);
-        if (/Authentication failed|could not read (Username|Password)|Permission denied \(publickey|HTTP (Basic: Access denied|401|403)|returned error: 40[13]|incorrect passphrase|Invalid username or (password|token)/i.test(msg)) {
-          return reject(new AuthError(`Sign-in was rejected by the host (${msg.split("\n").slice(-1)[0]})`));
+        if (/Authentication failed|could not read (Username|Password)|Permission denied \(publickey|HTTP (Basic: Access denied|401|403)|returned error: 40[13]|incorrect passphrase|Invalid username or (password|token)|access to repository not granted/i.test(msg)) {
+          const status = /\b403\b|not granted|permission|denied to/i.test(msg) && !/publickey|passphrase/i.test(msg) ? 403 : 401;
+          const hostLine = msg.split("\n").find((l) => /^remote:/i.test(l))?.replace(/^remote:\s*/i, "") ?? msg.split("\n").slice(-1)[0];
+          return reject(authProblem(status, hostLine, creds));
         }
+        if (/protected branch|not allowed to force push|pre-receive hook declined/i.test(msg + out)) return reject(new ProtectedBranchError(msg.split("\n").find((l) => /protected|force push|declined/i.test(l)) ?? msg));
         if (/\[rejected\]|non-fast-forward|fetch first|\[remote rejected\].*(stale|lock)/i.test(msg + out)) return reject(new PushRejectedError());
         reject(new GitCommandError(friendlyNetworkError(msg.split("\n").filter(Boolean).slice(-3).join(" ")), code));
       });
@@ -148,10 +151,10 @@ export class CliTransport implements Transport {
     return oid;
   }
 
-  async push(ep: Endpoint, oid: string): Promise<void> {
+  async push(ep: Endpoint, oid: string, opts: { force?: boolean } = {}): Promise<void> {
     const creds = await ep.getCredentials();
     checkUrlSafety(ep.url, !!creds?.password);
-    await this.run(["push", "--porcelain", "--quiet", ep.url, `${oid}:refs/heads/${BRANCH}`], ep, creds);
+    await this.run(["push", "--porcelain", "--quiet", ep.url, `${opts.force ? "+" : ""}${oid}:refs/heads/${BRANCH}`], ep, creds);
     await this.repo.setRemoteHead(ep.id, oid);
   }
 

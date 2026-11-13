@@ -60,11 +60,14 @@ export class EncgidianSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(el)
+    const pwSetting = new Setting(el)
       .setName("Vault password")
       .addButton((b) => b.setButtonText("Change password").onClick(() => p.changePassword().catch((e) => new Notice(e.message))))
       .addButton((b) => b.setButtonText("Show recovery key").onClick(() => p.showRecoveryKey().catch((e) => new Notice(e.message))))
       .addButton((b) => b.setButtonText("Lock now").onClick(() => p.lock()));
+    // Three buttons don't fit on a phone in one row.
+    pwSetting.controlEl.style.flexWrap = "wrap";
+    pwSetting.controlEl.style.gap = "8px";
 
     // ----- hosts -----
     new Setting(el)
@@ -210,6 +213,21 @@ export class EncgidianSettingTab extends PluginSettingTab {
         `Checked in order: KeePassXC, KWallet, GNOME Keyring, plain text. Found: ${found}.` +
           (cur === "plaintext" ? " ⚠ Plain text: anyone who can read your home folder can read these secrets." : ""),
       );
+      if (det.kwalletNeedsWallet) {
+        setting.addButton((b) =>
+          b.setButtonText("Create KWallet wallet").onClick(async () => {
+            b.setDisabled(true);
+            new Notice("KWallet will open a window to create the wallet. Follow it, then come back here.", 10000);
+            try {
+              if (await d.createKWallet()) new Notice("KWallet wallet is ready. You can now choose KWallet below.");
+              else new Notice("The wallet wasn't created (cancelled?).");
+            } catch (e) {
+              new Notice((e as Error).message);
+            }
+            this.display();
+          }),
+        );
+      }
       setting.addDropdown((dd) => {
         for (const b of d.LINUX_BACKEND_ORDER) {
           const ok = det.available.includes(b);
@@ -245,11 +263,19 @@ export class EncgidianSettingTab extends PluginSettingTab {
     box.style.padding = "0 12px";
     box.style.marginBottom = "12px";
 
-    new Setting(box)
+    const fullWidth = (st: Setting) => {
+      // On phones, put the control on its own full-width line under the label.
+      if (!Platform.isMobile) return;
+      st.settingEl.style.flexWrap = "wrap";
+      st.controlEl.style.width = "100%";
+      st.controlEl.style.flex = "1 1 100%";
+      st.controlEl.querySelectorAll("input[type=text], textarea").forEach((i) => ((i as HTMLElement).style.flex = "1"));
+    };
+    const nameSetting = new Setting(box)
       .setName("Host name")
       .setDesc("Shown in notices and the status bar. The toggle turns this host on or off.")
       .addText((t) => {
-        t.inputEl.style.width = "12em";
+        if (!Platform.isMobile) t.inputEl.style.width = "12em";
         t.setValue(r.name).onChange(async (v) => {
           r.name = v.trim() || "Host";
           await this.save();
@@ -264,8 +290,9 @@ export class EncgidianSettingTab extends PluginSettingTab {
             await this.save();
           }),
       );
+    fullWidth(nameSetting);
 
-    new Setting(box)
+    const urlSetting = new Setting(box)
       .setName("Repository URL")
       .setDesc("https://… or git@host:user/repo.git. Several URLs (one per line) are all kept up to date. Use a new, empty, private repository.")
       .addTextArea((t) => {
@@ -277,6 +304,8 @@ export class EncgidianSettingTab extends PluginSettingTab {
             await this.save();
           });
       });
+    urlSetting.controlEl.querySelector("textarea")?.style.setProperty("width", "100%");
+    fullWidth(urlSetting);
 
     new Setting(box).setName("Sign-in method").addDropdown((d) => {
       for (const [k, label] of Object.entries(AUTH_LABEL)) {
@@ -440,13 +469,41 @@ export class EncgidianSettingTab extends PluginSettingTab {
     const out = box.createEl("pre", { cls: "encgidian-test-result" });
     out.style.whiteSpace = "pre-wrap";
     out.style.display = "none";
+    const replaceBox = box.createDiv();
     test
       .addButton((b) =>
         b.setButtonText("Test").onClick(async () => {
           b.setDisabled(true);
           out.style.display = "";
           out.setText("Testing…");
-          out.setText(await p.testRemote(r).catch((e) => `✗ ${e.message}`));
+          replaceBox.empty();
+          try {
+            const res = await p.checkRemote(r);
+            out.setText(res.lines.join("\n"));
+            for (const ep of res.replaceable) {
+              new Setting(replaceBox)
+                .setName("Use this repository anyway?")
+                .setDesc(`${ep.url} has other content. If it's only starter files (like a README), it can be replaced by this vault. You'll be asked to confirm.`)
+                .addButton((rb) =>
+                  rb
+                    .setButtonText("Replace with this vault")
+                    .setWarning()
+                    .onClick(async () => {
+                      rb.setDisabled(true);
+                      try {
+                        await p.replaceRemoteContent(ep);
+                        out.setText(await p.testRemote(r));
+                        replaceBox.empty();
+                      } catch (e) {
+                        new Notice((e as Error).message, 15000);
+                      }
+                      rb.setDisabled(false);
+                    }),
+                );
+            }
+          } catch (e) {
+            out.setText(`✗ ${(e as Error).message}`);
+          }
           b.setDisabled(false);
         }),
       )

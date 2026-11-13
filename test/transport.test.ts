@@ -81,6 +81,14 @@ describe("token sign-in over HTTPS-style Basic auth", () => {
       const bad = new Device("B", path.join(tmp, "B"), { servers: [s], creds: { password: "wrong-token" }, transport });
       await expect(bad.sync()).rejects.toThrow(/Sign-in|sign-in|denied|401|403/);
 
+      // Right token, but no access to this repository: say so, with the host's reason.
+      s.forbidden = true;
+      const noAccess = new Device("D", path.join(tmp, "D"), { servers: [s], creds: { password: TOKEN }, transport });
+      await expect(noAccess.sync()).rejects.toThrow(/isn't allowed to use this repository.*not granted/);
+      s.forbidden = false;
+      const wrong = new Device("E", path.join(tmp, "E"), { servers: [s], creds: { password: "nope-token" }, transport });
+      await expect(wrong.sync()).rejects.toThrow(/wrong or has expired/);
+
       // No secret ends up in the local repo, its config, or the state file.
       expect(grepFor(TOKEN, path.join(tmp, "A"))).toBe("");
     });

@@ -21,6 +21,8 @@ export interface DeviceOpts {
   creds?: Credentials | ((url: string) => Credentials | undefined);
   proxy?: string;
   transport?: (repo: Repo, ep: Endpoint) => Transport;
+  /** File system for the device's Git repo (default: Node's fs). */
+  repoFs?: unknown;
 }
 
 export class Device {
@@ -43,7 +45,7 @@ export class Device {
     fs.mkdirSync(this.vaultDir, { recursive: true });
     this.password = o.password ?? "pw";
     this.servers = o.servers;
-    this.repo = new Repo(fs, path.join(root, "repo"));
+    this.repo = new Repo(o.repoFs ?? fs, path.join(root, "repo"));
     this.vault = new FolderVault(this.vaultDir);
     this.options = {
       device: name,

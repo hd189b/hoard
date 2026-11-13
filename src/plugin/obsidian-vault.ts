@@ -2,7 +2,7 @@
 // Normal files go through the Vault API (so Obsidian notices changes and the
 // user's trash setting applies); hidden files (".obsidian/…") through the adapter.
 
-import { App, normalizePath, TFile, TFolder } from "obsidian";
+import { App, normalizePath, Platform, TFile, TFolder } from "obsidian";
 import type { LocalState, StateStore, VaultFileInfo, VaultIO } from "../core/sync";
 
 const isHidden = (p: string) => p.split("/").some((s) => s.startsWith("."));
@@ -51,7 +51,9 @@ export class ObsidianVault implements VaultIO {
 
   async write(p: string, data: Uint8Array, mtime: number) {
     this.mark(p);
-    const opts = mtime > 0 ? { mtime } : undefined;
+    // Obsidian for Android sometimes leaves a file empty when asked to set its
+    // modified time while writing, so only keep original times on desktop.
+    const opts = mtime > 0 && Platform.isDesktopApp ? { mtime } : undefined;
     const f = this.app.vault.getAbstractFileByPath(p);
     if (f instanceof TFile) return this.app.vault.modifyBinary(f, toAB(data), opts);
     await this.ensureFolder(p);

@@ -328,10 +328,16 @@ export default class EncgidianPlugin extends Plugin {
 
   /** Check one host: reachable, signed in, and what it holds. */
   async testRemote(r: RemoteConfig): Promise<string> {
+    return (await this.checkRemote(r)).lines.join("\n");
+  }
+
+  /** Like testRemote, plus the URLs that hold unrelated content and could be replaced. */
+  async checkRemote(r: RemoteConfig): Promise<{ lines: string[]; replaceable: Endpoint[] }> {
     const lines: string[] = [];
+    const replaceable: Endpoint[] = [];
     await this.repo.init();
     const urls = r.urls.map((u) => u.trim()).filter(Boolean);
-    if (!urls.length) return "Add a URL first.";
+    if (!urls.length) return { lines: ["Add a URL first."], replaceable };
     for (const [i, url] of urls.entries()) {
       const ep: Endpoint = { id: `${r.id}-${i}`, name: r.name, url, getCredentials: () => this.credentials(r) };
       try {
@@ -341,15 +347,41 @@ export default class EncgidianPlugin extends Plugin {
           continue;
         }
         const kf = await this.repo.keyFileAt(head).catch(() => null);
-        const local = (await this.repo.head()) && (await this.repo.keyFileAt((await this.repo.head())!));
-        if (!kf) lines.push(`✗ ${url}: connected, but it holds other content, not an encrypted vault.`);
-        else if (local && local.keyFile.vaultId !== kf.keyFile.vaultId) lines.push(`✗ ${url}: connected, but it holds a different vault.`);
+        const localHead = await this.repo.head();
+        const local = localHead ? await this.repo.keyFileAt(localHead) : null;
+        if (!kf) {
+          lines.push(`✗ ${url}: connected, but it holds other content, not an encrypted vault.`);
+          replaceable.push(ep);
+        } else if (local && local.keyFile.vaultId !== kf.keyFile.vaultId) lines.push(`✗ ${url}: connected, but it holds a different vault.`);
         else lines.push(`✓ ${url}: connected; holds this encrypted vault.`);
       } catch (e) {
         lines.push(`✗ ${url}: ${(e as Error).message}`);
       }
     }
-    return lines.join("\n");
+    return { lines, replaceable };
+  }
+
+  /** After confirmation, overwrite a host's unrelated content with this vault. */
+  async replaceRemoteContent(ep: Endpoint): Promise<void> {
+    const info = await this.engine.inspectForReplace(ep);
+    const ok = await ConfirmModal.ask(
+      this.app,
+      `Replace the content of ${ep.name}?`,
+      `${ep.url} holds ${info.commits} commit${info.commits === 1 ? "" : "s"} of other content (for example a README the host created). ` +
+        `It will be replaced by this encrypted vault, and that content will no longer be on its main branch. ` +
+        `If the host protects its main branch, allow force-push there first.`,
+      "Replace",
+    );
+    if (!ok) return;
+    this.interactive = true;
+    try {
+      this.lastReport = await this.engine.replaceHost(ep, info.head);
+      this.lastSyncAt = Date.now();
+      this.report(this.lastReport, true);
+    } finally {
+      this.interactive = false;
+      this.renderStatus();
+    }
   }
 
   // ---------- syncing ----------
@@ -420,6 +452,12 @@ export default class EncgidianPlugin extends Plugin {
       new Notice(`Encrypted sync: “${c.path}” was changed on two devices. The other version was kept; yours is saved as “${c.copy}”.`, 0);
     }
     for (const c of r.clashes) new Notice(`Encrypted sync: “${c.from}” clashed with a file that differs only in capital letters; it is now “${c.to}”.`, 15000);
+    if (r.repoRepaired) {
+      new Notice("Encrypted sync: this device's local copy of the history was damaged and has been rebuilt from a host. Your notes were not affected.", 20000);
+    }
+    if (r.repaired.length) {
+      new Notice(`Encrypted sync: ${r.repaired.length} file${r.repaired.length === 1 ? " was" : "s were"} damaged on this device and restored from the encrypted copy: ${r.repaired.slice(0, 5).join(", ")}${r.repaired.length > 5 ? "…" : ""}`, 20000);
+    }
     for (const c of r.renamedLocal) new Notice(`Encrypted sync: renamed “${c.from}” to “${c.to}” so it also works on Windows and Android.`, 15000);
     for (const st of r.remotes) {
       const prev = this.shownErrors.get(st.id);
