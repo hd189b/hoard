@@ -1,5 +1,30 @@
+# Dependencies (restore with `npm install`)
 node_modules/
-main.js
+
+# Build output: plugin (main.js, manifest copy) and decrypter executables
 dist/
-*.log
+build/
+/main.js
+*.exe
+*.tsbuildinfo
+
+# Test and coverage leftovers
+coverage/
 test/.tmp/
+.vitest/
+*.log
+
+# Local plugin data if the repo is ever opened as a vault
+data.json
+.obsidian/
+
+# Secrets and local environment
+.env
+.env.*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
