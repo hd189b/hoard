@@ -55,7 +55,7 @@ export class Device {
     this.options = {
       device: name,
       configDir: ".obsidian",
-      pluginDir: ".obsidian/plugins/encgidian",
+      pluginDir: ".obsidian/plugins/hoard",
       syncConfigDir: false,
       ignoredFolders: [],
       maxFileSize: 0,

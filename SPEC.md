@@ -1,4 +1,4 @@
-# Project: Encrypted multi-Git sync plugin for Obsidian (v2 design)
+# Hoard: encrypted multi-Git sync plugin for Obsidian (design spec)
 
 ## Goal
 An Obsidian plugin that keeps a vault in two-way sync across

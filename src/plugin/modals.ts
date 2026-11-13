@@ -72,7 +72,7 @@ export class CopyTextModal extends Modal {
   onOpen() {
     this.setTitle(this.titleText);
     this.contentEl.createEl("p", { text: this.intro });
-    const pre = this.contentEl.createEl("pre", { cls: "encgidian-copy" });
+    const pre = this.contentEl.createEl("pre", { cls: "hoard-copy" });
     pre.setText(this.text);
     pre.style.userSelect = "all";
     pre.style.whiteSpace = "pre-wrap";

@@ -5,7 +5,7 @@ export const UI_HTML = /* html */ `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Encgidian Decrypter</title>
+<title>Hoard Decrypter</title>
 <style>
 :root {
   --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3df;
@@ -79,7 +79,7 @@ iframe.content { width: 100%; height: 70vh; border: 1px solid var(--line); borde
 
 <section id="app" class="hidden">
   <header>
-    <span class="title">Encgidian Decrypter</span>
+    <span class="title">Hoard Decrypter</span>
     <label class="muted" for="snap">Sync</label>
     <select id="snap" aria-label="Snapshot"></select>
     <button id="deletedBtn">Deleted files</button>

@@ -197,7 +197,7 @@ export class CliTransport implements Transport {
  * Create an ed25519 key protected by `passphrase` with ssh-keygen. The passphrase
  * goes through the askpass helper, not the command line. Returns the public key.
  */
-export async function generateSshKey(helperDir: string, file: string, passphrase: string, comment = "encgidian"): Promise<string> {
+export async function generateSshKey(helperDir: string, file: string, passphrase: string, comment = "hoard"): Promise<string> {
   const askpass = path.join(helperDir, "askpass.sh");
   await fsp.mkdir(helperDir, { recursive: true });
   await fsp.writeFile(askpass, ASKPASS, { mode: 0o700 });

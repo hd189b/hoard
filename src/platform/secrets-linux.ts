@@ -104,7 +104,7 @@ export async function createKWallet(): Promise<boolean> {
   const name = kwalletName();
   const r = await run(
     "dbus-send",
-    ["--session", "--print-reply", "--reply-timeout=300000", `--dest=org.kde.${kw.service}`, `/modules/${kw.service}`, "org.kde.KWallet.open", `string:${name}`, "int64:0", "string:Encgidian"],
+    ["--session", "--print-reply", "--reply-timeout=300000", `--dest=org.kde.${kw.service}`, `/modules/${kw.service}`, "org.kde.KWallet.open", `string:${name}`, "int64:0", "string:Hoard"],
     undefined,
     310000,
   );
@@ -166,7 +166,7 @@ class SecretToolStore implements SecretStore {
     return LINUX_BACKEND_LABEL[this.kind];
   }
   private attrs(key: string) {
-    return ["service", "encgidian", "account", `${this.ns}:${key}`];
+    return ["service", "hoard", "account", `${this.ns}:${key}`];
   }
   async get(key: string) {
     const r = await run("secret-tool", ["lookup", ...this.attrs(key)]);
@@ -177,7 +177,7 @@ class SecretToolStore implements SecretStore {
     return r.out;
   }
   async set(key: string, value: string) {
-    const r = await run("secret-tool", ["store", `--label=encgidian ${key}`, ...this.attrs(key)], value);
+    const r = await run("secret-tool", ["store", `--label=Hoard ${key}`, ...this.attrs(key)], value);
     if (r.code !== 0) throw new Error(`${this.label}: ${r.err.trim() || "could not store secret (is it unlocked?)"}`);
   }
   async delete(key: string) {
@@ -207,7 +207,7 @@ class KWalletStore implements SecretStore {
     return `${this.ns}:${key}`;
   }
   async get(key: string) {
-    const r = await run("kwallet-query", ["-f", "encgidian", "-r", this.entry(key), this.wallet], undefined, 60000);
+    const r = await run("kwallet-query", ["-f", "hoard", "-r", this.entry(key), this.wallet], undefined, 60000);
     if (r.code !== 0) {
       if (/Wallet .* not found/i.test(r.err + r.out)) throw new Error(`KWallet has no wallet “${this.wallet}” yet; create it from the plugin settings`);
       // Real kwallet-query says "Failed to read entry … value" for a missing entry.
@@ -218,12 +218,12 @@ class KWalletStore implements SecretStore {
     return v === "" ? null : v;
   }
   async set(key: string, value: string) {
-    const r = await run("kwallet-query", ["-f", "encgidian", "-w", this.entry(key), this.wallet], value, 60000);
+    const r = await run("kwallet-query", ["-f", "hoard", "-w", this.entry(key), this.wallet], value, 60000);
     if (r.code !== 0) throw new Error(`KWallet: ${(r.err || r.out).trim() || "could not store secret"}`);
   }
   async delete(key: string) {
     // kwallet-query can't delete; overwrite with an empty value.
-    await run("kwallet-query", ["-f", "encgidian", "-w", this.entry(key), this.wallet], "", 60000);
+    await run("kwallet-query", ["-f", "hoard", "-w", this.entry(key), this.wallet], "", 60000);
   }
 }
 
@@ -231,7 +231,7 @@ export class PlaintextStore implements SecretStore {
   readonly kind = "plaintext" as const;
   readonly label = LINUX_BACKEND_LABEL.plaintext;
   readonly file: string;
-  constructor(ns: string, dir = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "encgidian")) {
+  constructor(ns: string, dir = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "hoard")) {
     this.file = path.join(dir, `secrets-${ns.replace(/[^a-z0-9-]/gi, "_")}.json`);
   }
   private async load(): Promise<Record<string, string>> {

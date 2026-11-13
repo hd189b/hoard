@@ -295,7 +295,7 @@ describe("safety", () => {
         expect(text.includes(needle), `found "${needle}" in ${s}`).toBe(false);
       }
       const log = execFileSync("git", ["-C", dir, "log", "--format=%an|%ae|%cn|%ce|%s"]).toString();
-      expect(new Set(log.trim().split("\n"))).toEqual(new Set(["encgidian|sync@invalid|encgidian|sync@invalid|sync"]));
+      expect(new Set(log.trim().split("\n"))).toEqual(new Set(["hoard|sync@invalid|hoard|sync@invalid|sync"]));
     }
   });
 });
@@ -346,7 +346,7 @@ describe("filters", () => {
     const pc = mk("PC", { options: { syncConfigDir: true } });
     pc.put(".obsidian/app.json", "{}");
     pc.put(".obsidian/workspace.json", "layout");
-    pc.put(".obsidian/plugins/encgidian/data.json", "secret settings");
+    pc.put(".obsidian/plugins/hoard/data.json", "secret settings");
     await pc.sync();
     const phone = mk("Phone", { options: { syncConfigDir: true } });
     await phone.sync();

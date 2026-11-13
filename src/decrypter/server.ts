@@ -83,7 +83,7 @@ export async function startServer(reader: VaultReader, port = 0): Promise<{ url:
             unlocked: reader.unlocked,
             repo: reader.gitdir,
             vaultId: reader.keyFile.vaultId,
-            defaultExport: path.join(os.homedir(), `encgidian-export-${new Date().toISOString().slice(0, 10)}`),
+            defaultExport: path.join(os.homedir(), `hoard-export-${new Date().toISOString().slice(0, 10)}`),
           });
         case "/api/unlock": {
           const b = await body(req);

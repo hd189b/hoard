@@ -5,7 +5,7 @@ import type { SecretStore } from "../core/secrets";
 
 /** Obsidian accepts lowercase letters, digits and dashes, at most 64 characters. */
 export function obsidianSecretId(ns: string, key: string): string {
-  const id = `encgidian-${ns}-${key}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const id = `hoard-${ns}-${key}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
   if (id.length > 64) throw new Error(`internal: secret id too long (${id.length} > 64): ${key}`);
   return id;
 }

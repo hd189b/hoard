@@ -342,7 +342,7 @@ export class SyncEngine {
         const h = await t.fetch(ep, listing, have);
         if (h) {
           const kf = await repo.keyFileAt(h).catch((e) => {
-            throw new VaultMismatchError(`Not an encgidian vault: ${e.message}`);
+            throw new VaultMismatchError(`Not a Hoard vault: ${e.message}`);
           });
           if (!kf) {
             throw new VaultMismatchError(

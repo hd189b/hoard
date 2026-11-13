@@ -103,11 +103,11 @@ describe("Windows paths in Git commands", () => {
   it("quotes key and known_hosts paths with spaces and backslashes", () => {
     const cmd = sshCommand(
       { sshKeyPath: "C:\\Users\\John Doe\\.ssh\\id_ed25519" },
-      { helperDir: "C:\\Users\\John Doe\\Vault\\.obsidian\\plugins\\encgidian\\ssh", proxy: "socks5://127.0.0.1:1080" },
+      { helperDir: "C:\\Users\\John Doe\\Vault\\.obsidian\\plugins\\hoard\\ssh", proxy: "socks5://127.0.0.1:1080" },
       true,
     );
     expect(cmd).toContain('-i "C:/Users/John Doe/.ssh/id_ed25519"');
-    expect(cmd).toContain('UserKnownHostsFile="C:/Users/John Doe/Vault/.obsidian/plugins/encgidian/ssh/known_hosts"');
+    expect(cmd).toContain('UserKnownHostsFile="C:/Users/John Doe/Vault/.obsidian/plugins/hoard/ssh/known_hosts"');
     expect(cmd).toContain('ProxyCommand=connect -S 127.0.0.1:1080 %h %p');
     expect(cmd).not.toContain("\\");
   });

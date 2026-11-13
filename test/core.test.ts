@@ -56,7 +56,7 @@ describe("keys", () => {
   });
 
   it("refuses foreign files", () => {
-    expect(() => parseKeyFile('{"format":"x"}')).toThrow(/not an encgidian vault/);
+    expect(() => parseKeyFile('{"format":"x"}')).toThrow(/not a Hoard vault/);
   });
 });
 

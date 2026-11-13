@@ -1,15 +1,15 @@
 {
-  "name": "encgidian",
+  "name": "hoard",
   "version": "0.1.0",
   "private": true,
-  "description": "Encrypted multi-Git sync for Obsidian",
+  "description": "Hoard: encrypted multi-Git sync for Obsidian",
   "type": "module",
   "scripts": {
     "build": "node esbuild.config.mjs production && cp manifest.json dist/plugin/",
     "dev": "node esbuild.config.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build:decrypter": "bun build src/decrypter/bin.ts --compile --minify --target=bun-linux-x64 --outfile dist/decrypter/encgidian-decrypt && bun build src/decrypter/bin.ts --compile --minify --target=bun-windows-x64 --outfile dist/decrypter/encgidian-decrypt.exe"
+    "build:decrypter": "bun build src/decrypter/bin.ts --compile --minify --target=bun-linux-x64 --outfile dist/decrypter/hoard-decrypt && bun build src/decrypter/bin.ts --compile --minify --target=bun-windows-x64 --outfile dist/decrypter/hoard-decrypt.exe"
   },
   "dependencies": {
     "buffer": "^6.0.3",

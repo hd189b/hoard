@@ -21,7 +21,7 @@ import { KEYFILE_PATH, KeyFile, parseKeyFile, VaultKeys } from "./keys";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type GitFs = any;
 
-export const AUTHOR = { name: "encgidian", email: "sync@invalid" };
+export const AUTHOR = { name: "hoard", email: "sync@invalid" };
 
 let stepCounter = 0;
 
@@ -44,7 +44,7 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.e
  *    empty), so it gets written again instead of being trusted.
  */
 export function guardedFs(raw: GitFs): GitFs {
-  if (raw.__encgidianGuarded) return raw;
+  if (raw.__hoardGuarded) return raw;
   const p = raw.promises;
   const isEmptyLoose = async (path: string) => {
     if (!LOOSE_OBJECT.test(path)) return false;
@@ -79,7 +79,7 @@ export function guardedFs(raw: GitFs): GitFs {
       throw new Error(`Couldn't save ${path.slice(path.lastIndexOf("/objects/") + 1)} correctly on this device; the sync was stopped. Try again.`);
     },
   };
-  return { promises, __encgidianGuarded: true };
+  return { promises, __hoardGuarded: true };
 }
 
 interface TreeEntry {

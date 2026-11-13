@@ -2,7 +2,7 @@ import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import { moveSecrets } from "../core/secrets";
 import { isSshUrl } from "../core/transport";
 import { githubDeviceLogin } from "./github";
-import type EncgidianPlugin from "./main";
+import type HoardPlugin from "./main";
 import { CopyTextModal, DeviceCodeModal, PasswordModal } from "./modals";
 import { AuthMethod, Engine, newRemote, RemoteConfig, secretKeys } from "./settings";
 
@@ -14,10 +14,10 @@ const AUTH_LABEL: Record<AuthMethod, string> = {
   none: "None (public or local server)",
 };
 
-export class EncgidianSettingTab extends PluginSettingTab {
+export class HoardSettingTab extends PluginSettingTab {
   constructor(
     app: App,
-    private readonly plugin: EncgidianPlugin,
+    private readonly plugin: HoardPlugin,
   ) {
     super(app, plugin);
   }
@@ -260,7 +260,7 @@ export class EncgidianSettingTab extends PluginSettingTab {
 
   private remoteBlock(el: HTMLElement, r: RemoteConfig) {
     const p = this.plugin;
-    const box = el.createDiv({ cls: "encgidian-remote" });
+    const box = el.createDiv({ cls: "hoard-remote" });
     box.style.border = "1px solid var(--background-modifier-border)";
     box.style.borderRadius = "8px";
     box.style.padding = "0 12px";
@@ -433,7 +433,7 @@ export class EncgidianSettingTab extends PluginSettingTab {
               const file = d.joinPath(base, p.pluginDir, "ssh", `id_ed25519_${r.id}`);
               const pass = Array.from(crypto.getRandomValues(new Uint8Array(24)), (x) => x.toString(16).padStart(2, "0")).join("");
               try {
-                const pub = await d.generateSshKey(d.joinPath(base, p.pluginDir, "ssh"), file, pass, `encgidian ${p.deviceName()}`);
+                const pub = await d.generateSshKey(d.joinPath(base, p.pluginDir, "ssh"), file, pass, `hoard ${p.deviceName()}`);
                 await p.secrets.set(secretKeys.sshPassphrase(r.id), pass);
                 r.sshKeyPath = file;
                 await this.save();
@@ -469,7 +469,7 @@ export class EncgidianSettingTab extends PluginSettingTab {
     }
 
     const test = new Setting(box);
-    const out = box.createEl("pre", { cls: "encgidian-test-result" });
+    const out = box.createEl("pre", { cls: "hoard-test-result" });
     out.style.whiteSpace = "pre-wrap";
     out.style.display = "none";
     const replaceBox = box.createDiv();

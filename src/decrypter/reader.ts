@@ -43,7 +43,7 @@ export class VaultReader {
     const kf = await r.repo.keyFileAt(head).catch((e) => {
       throw new ReaderError(e.message);
     });
-    if (!kf) throw new ReaderError("This repository is not an encgidian vault (no keys.json)");
+    if (!kf) throw new ReaderError("This repository is not a Hoard vault (no keys.json)");
     r.keyFile = kf.keyFile;
     return r;
   }

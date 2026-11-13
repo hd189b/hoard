@@ -14,7 +14,7 @@ import { ConfirmModal, CopyTextModal, DeletedPickModal, fmtTime, PasswordModal, 
 import { AdapterState, ObsidianVault } from "./obsidian-vault";
 import { ObsidianSecretStore } from "./secret-obsidian";
 import { DEFAULT_SETTINGS, KDF, randomId, RemoteConfig, secretKeys, Settings } from "./settings";
-import { EncgidianSettingTab } from "./settings-tab";
+import { HoardSettingTab } from "./settings-tab";
 
 type Desktop = typeof import("../platform/desktop");
 
@@ -34,7 +34,7 @@ class CancelledError extends Error {
 
 const RETRY_MINUTES = [1, 2, 5, 10];
 
-export default class EncgidianPlugin extends Plugin {
+export default class HoardPlugin extends Plugin {
   conf!: Settings;
   secrets!: SecretStore;
   desktop: Desktop | null = null;
@@ -102,7 +102,7 @@ export default class EncgidianPlugin extends Plugin {
     this.statusEl = this.addStatusBarItem();
     this.statusEl.addClass("mod-clickable");
     this.statusEl.addEventListener("click", () => this.syncNow(true));
-    this.addRibbonIcon("refresh-cw", "Encrypted sync: sync now", () => this.syncNow(true));
+    this.addRibbonIcon("refresh-cw", "Hoard: sync now", () => this.syncNow(true));
     this.renderStatus();
 
     this.addCommand({ id: "sync-now", name: "Sync now", callback: () => this.syncNow(true) });
@@ -122,7 +122,7 @@ export default class EncgidianPlugin extends Plugin {
     this.addCommand({ id: "lock-vault", name: "Lock vault (ask for the password next time)", callback: () => this.lock() });
     this.addCommand({ id: "show-status", name: "Show sync status of each host", callback: () => this.showStatus() });
 
-    this.addSettingTab(new EncgidianSettingTab(this.app, this));
+    this.addSettingTab(new HoardSettingTab(this.app, this));
 
     for (const ev of ["modify", "create", "delete", "rename"] as const) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -178,7 +178,7 @@ export default class EncgidianPlugin extends Plugin {
         this.conf.linuxSecretBackend = kind;
         await this.saveSettings();
         if (kind === "plaintext") {
-          new Notice("Encrypted sync: no keyring found (KeePassXC, KWallet or GNOME Keyring). Passwords are stored in a plain file only you can read. You can change this in settings.", 15000);
+          new Notice("Hoard: no keyring found (KeePassXC, KWallet or GNOME Keyring). Passwords are stored in a plain file only you can read. You can change this in settings.", 15000);
         }
       }
       return this.desktop.linuxStore(kind as never, this.conf.localId);
@@ -225,7 +225,7 @@ export default class EncgidianPlugin extends Plugin {
     if (!this.keys) return;
     if (this.conf.rememberPassword) {
       await this.secrets.set(secretKeys.vaultKey(this.keys.vaultId), toB64(this.keys.exportRaw())).catch((e) => {
-        new Notice(`Encrypted sync: couldn't save the key in ${this.secrets.label}: ${e.message}`);
+        new Notice(`Hoard: couldn't save the key in ${this.secrets.label}: ${e.message}`);
       });
     }
   }
@@ -272,7 +272,7 @@ export default class EncgidianPlugin extends Plugin {
     this.keys?.wipe();
     this.keys = null;
     if (id) this.secrets.delete(secretKeys.vaultKey(id)).catch(() => {});
-    new Notice("Encrypted sync: vault locked. The password will be asked at the next sync.");
+    new Notice("Hoard: vault locked. The password will be asked at the next sync.");
     this.renderStatus();
   }
 
@@ -421,11 +421,11 @@ export default class EncgidianPlugin extends Plugin {
 
   async syncNow(interactive: boolean): Promise<SyncReport | null> {
     if (!this.conf.remotes.some((r) => r.enabled && r.urls.some((u) => u.trim()))) {
-      if (interactive) new Notice("Encrypted sync: add a Git host in the settings first.");
+      if (interactive) new Notice("Hoard: add a Git host in the settings first.");
       return null;
     }
     if (this.engine.isRunning) {
-      if (interactive) new Notice("Encrypted sync: already syncing…");
+      if (interactive) new Notice("Hoard: already syncing…");
       return null;
     }
     this.interactive = interactive;
@@ -457,31 +457,31 @@ export default class EncgidianPlugin extends Plugin {
 
   private report(r: SyncReport, interactive: boolean) {
     for (const c of [...r.conflicts, ...r.lateConflicts]) {
-      new Notice(`Encrypted sync: “${c.path}” was changed on two devices. The other version was kept; yours is saved as “${c.copy}”.`, 0);
+      new Notice(`Hoard: “${c.path}” was changed on two devices. The other version was kept; yours is saved as “${c.copy}”.`, 0);
     }
-    for (const c of r.clashes) new Notice(`Encrypted sync: “${c.from}” clashed with a file that differs only in capital letters; it is now “${c.to}”.`, 15000);
+    for (const c of r.clashes) new Notice(`Hoard: “${c.from}” clashed with a file that differs only in capital letters; it is now “${c.to}”.`, 15000);
     if (r.missingLarge.length) {
-      new Notice(`Encrypted sync: ${r.missingLarge.length} large file${r.missingLarge.length === 1 ? " isn't" : "s aren't"} on any reachable host yet and will be fetched later: ${r.missingLarge.slice(0, 3).join(", ")}`, 15000);
+      new Notice(`Hoard: ${r.missingLarge.length} large file${r.missingLarge.length === 1 ? " isn't" : "s aren't"} on any reachable host yet and will be fetched later: ${r.missingLarge.slice(0, 3).join(", ")}`, 15000);
     }
     if (r.repoRepaired) {
-      new Notice("Encrypted sync: this device's local copy of the history was damaged and has been rebuilt from a host. Your notes were not affected.", 20000);
+      new Notice("Hoard: this device's local copy of the history was damaged and has been rebuilt from a host. Your notes were not affected.", 20000);
     }
     if (r.repaired.length) {
-      new Notice(`Encrypted sync: ${r.repaired.length} file${r.repaired.length === 1 ? " was" : "s were"} damaged on this device and restored from the encrypted copy: ${r.repaired.slice(0, 5).join(", ")}${r.repaired.length > 5 ? "…" : ""}`, 20000);
+      new Notice(`Hoard: ${r.repaired.length} file${r.repaired.length === 1 ? " was" : "s were"} damaged on this device and restored from the encrypted copy: ${r.repaired.slice(0, 5).join(", ")}${r.repaired.length > 5 ? "…" : ""}`, 20000);
     }
-    for (const c of r.renamedLocal) new Notice(`Encrypted sync: renamed “${c.from}” to “${c.to}” so it also works on Windows and Android.`, 15000);
+    for (const c of r.renamedLocal) new Notice(`Hoard: renamed “${c.from}” to “${c.to}” so it also works on Windows and Android.`, 15000);
     for (const st of r.remotes) {
       const prev = this.shownErrors.get(st.id);
       if (st.error && (prev !== st.error || interactive)) {
-        new Notice(`Encrypted sync — ${st.name}: ${st.error}`, 15000);
+        new Notice(`Hoard — ${st.name}: ${st.error}`, 15000);
         this.shownErrors.set(st.id, st.error);
       } else if (!st.error && prev) {
-        new Notice(`Encrypted sync — ${st.name} is reachable again and up to date.`);
+        new Notice(`Hoard — ${st.name} is reachable again and up to date.`);
         this.shownErrors.delete(st.id);
       }
     }
     if (interactive && r.remotes.every((s) => !s.error)) {
-      new Notice(`Encrypted sync: done${r.applied ? `, ${r.applied} file${r.applied === 1 ? "" : "s"} updated` : ""}.`);
+      new Notice(`Hoard: done${r.applied ? `, ${r.applied} file${r.applied === 1 ? "" : "s"} updated` : ""}.`);
     }
   }
 
@@ -499,8 +499,8 @@ export default class EncgidianPlugin extends Plugin {
 
   private fail(e: unknown) {
     if (e instanceof CancelledError) return;
-    new Notice(`Encrypted sync: ${(e as Error).message ?? e}`, 15000);
-    console.error("[encgidian]", e);
+    new Notice(`Hoard: ${(e as Error).message ?? e}`, 15000);
+    console.error("[hoard]", e);
   }
 
   renderStatus() {
@@ -511,7 +511,7 @@ export default class EncgidianPlugin extends Plugin {
     else if (this.engine?.isRunning) text = "⟳ Syncing…";
     else if (this.lastError === "locked") text = "🔒 Locked";
     else if (this.lastError) text = "⚠ Sync failed";
-    else if (!r) text = "Encrypted sync";
+    else if (!r) text = "Hoard";
     else {
       const bad = r.remotes.filter((s) => s.error).length;
       const t = new Date(this.lastSyncAt || Date.now());
@@ -593,7 +593,7 @@ export default class EncgidianPlugin extends Plugin {
     try {
       const r = await this.engine.changePassword(pw, KDF[this.conf.kdfStrength]);
       this.lastReport = r;
-      new Notice("Encrypted sync: password changed on every reachable host.");
+      new Notice("Hoard: password changed on every reachable host.");
     } finally {
       this.interactive = false;
       this.renderStatus();

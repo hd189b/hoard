@@ -1,4 +1,4 @@
-// encgidian-decrypt: read an encgidian vault from a Git repository without Obsidian.
+// hoard-decrypt: read an encgidian vault from a Git repository without Obsidian.
 
 import { spawn } from "child_process";
 import * as fs from "fs";
@@ -6,25 +6,25 @@ import { WrongPasswordError } from "../core/keys";
 import { ReaderError, VaultReader } from "./reader";
 import { startServer } from "./server";
 
-const HELP = `encgidian-decrypt — read an encrypted Obsidian vault without Obsidian
+const HELP = `hoard-decrypt — read a Hoard vault without Obsidian
 
 Usage:
-  encgidian-decrypt [REPO]                     open the browser interface (default)
-  encgidian-decrypt list REPO [--at SYNC]      list files in a sync (default: latest)
-  encgidian-decrypt syncs REPO                 list every sync with its date
-  encgidian-decrypt history REPO PATH          list every version of a file
-  encgidian-decrypt cat REPO PATH [--at SYNC] [--version N]
+  hoard-decrypt [REPO]                     open the browser interface (default)
+  hoard-decrypt list REPO [--at SYNC]      list files in a sync (default: latest)
+  hoard-decrypt syncs REPO                 list every sync with its date
+  hoard-decrypt history REPO PATH          list every version of a file
+  hoard-decrypt cat REPO PATH [--at SYNC] [--version N]
                                                print a file (N=1 is newest)
-  encgidian-decrypt deleted REPO               list deleted files
-  encgidian-decrypt export REPO DIR [--at SYNC]
+  hoard-decrypt deleted REPO               list deleted files
+  hoard-decrypt export REPO DIR [--at SYNC]
                                                write every file of a sync to DIR
 
 REPO is a clone of any of your Git hosts. Use "git clone --mirror URL" so
 large files (stored outside the main history) are included too.
 SYNC is a sync id (or its first characters) from "syncs".
 
-The password is asked for interactively. For scripts, set ENCGIDIAN_PASSWORD
-or ENCGIDIAN_RECOVERY_KEY. Add --recovery-key to type a recovery key instead.
+The password is asked for interactively. For scripts, set HOARD_PASSWORD
+or HOARD_RECOVERY_KEY. Add --recovery-key to type a recovery key instead.
 Options for the browser interface: --port N, --no-open.
 `;
 
@@ -66,8 +66,8 @@ function askHidden(prompt: string): Promise<string> {
 }
 
 async function unlock(r: VaultReader, useRecovery: boolean) {
-  if (process.env.ENCGIDIAN_RECOVERY_KEY) return r.unlockRecoveryKey(process.env.ENCGIDIAN_RECOVERY_KEY);
-  if (process.env.ENCGIDIAN_PASSWORD) return r.unlockPassword(process.env.ENCGIDIAN_PASSWORD);
+  if (process.env.HOARD_RECOVERY_KEY) return r.unlockRecoveryKey(process.env.HOARD_RECOVERY_KEY);
+  if (process.env.HOARD_PASSWORD) return r.unlockPassword(process.env.HOARD_PASSWORD);
   for (let i = 0; i < 3; i++) {
     try {
       if (useRecovery) return await r.unlockRecoveryKey(await askHidden("Recovery key: "));

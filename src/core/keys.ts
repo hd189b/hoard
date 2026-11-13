@@ -95,7 +95,7 @@ export function parseKeyFile(data: Uint8Array | string): KeyFile {
   } catch {
     throw new KeyFileError("keys.json is not valid JSON");
   }
-  if (kf?.format !== "encgidian-keys") throw new KeyFileError("This repository is not an encgidian vault");
+  if (kf?.format !== "encgidian-keys") throw new KeyFileError("This repository is not a Hoard vault");
   if (kf.version !== 1) throw new KeyFileError(`Unsupported vault format version ${kf.version}; update the plugin`);
   if (kf.kdf?.alg !== "argon2id") throw new KeyFileError("Unsupported key derivation");
   if (typeof kf.vaultId !== "string" || !/^[0-9a-f]{32}$/.test(kf.vaultId)) throw new KeyFileError("Bad vault id");
