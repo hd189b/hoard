@@ -1,6 +1,6 @@
 import { Notice, Platform, Plugin, TFile, debounce } from "obsidian";
 import { fromB64, toB64 } from "../core/bytes";
-import { fileVersions, deletedFiles, readEntry, Version } from "../core/history";
+import { fileVersions, deletedFiles, Version } from "../core/history";
 import { createKeyFile, formatRecoveryKey, KeyFile, unlockWithPassword, unlockWithRawKey, VaultKeys, WrongPasswordError } from "../core/keys";
 import { clashKey, splitPath, uniqueName } from "../core/names";
 import { Repo, GitFs } from "../core/repo";
@@ -45,6 +45,7 @@ export default class EncgidianPlugin extends Plugin {
   lastReport: SyncReport | null = null;
   lastError: string | null = null;
   lastSyncAt = 0;
+  progressText: string | null = null;
   private interactive = false;
   private statusEl!: HTMLElement;
   private autoTimer: number | null = null;
@@ -82,6 +83,10 @@ export default class EncgidianPlugin extends Plugin {
       vault: this.vaultIO,
       state: new AdapterState(this.app, `${this.pluginDir}/state.json`),
       keys: { unlock: (kf) => this.unlock(kf), create: () => this.createVault() },
+      onProgress: (text) => {
+        this.progressText = text;
+        this.renderStatus();
+      },
       transportFor: (ep) => this.transportFor(ep),
       endpoints: () => this.endpoints(),
       options: () => ({
@@ -142,7 +147,10 @@ export default class EncgidianPlugin extends Plugin {
   // ---------- settings & secrets ----------
 
   async loadSettings() {
-    this.conf = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = (await this.loadData()) ?? {};
+    this.conf = Object.assign({}, DEFAULT_SETTINGS, saved);
+    // Obsidian for Android crashes on downloads much above ~20 MB, so phones skip big files by default.
+    if (Platform.isMobile && saved.maxFileSizeMB === undefined) this.conf.maxFileSizeMB = 10;
     if (!this.conf.localId) {
       this.conf.localId = randomId(8);
       await this.saveSettings();
@@ -452,6 +460,9 @@ export default class EncgidianPlugin extends Plugin {
       new Notice(`Encrypted sync: “${c.path}” was changed on two devices. The other version was kept; yours is saved as “${c.copy}”.`, 0);
     }
     for (const c of r.clashes) new Notice(`Encrypted sync: “${c.from}” clashed with a file that differs only in capital letters; it is now “${c.to}”.`, 15000);
+    if (r.missingLarge.length) {
+      new Notice(`Encrypted sync: ${r.missingLarge.length} large file${r.missingLarge.length === 1 ? " isn't" : "s aren't"} on any reachable host yet and will be fetched later: ${r.missingLarge.slice(0, 3).join(", ")}`, 15000);
+    }
     if (r.repoRepaired) {
       new Notice("Encrypted sync: this device's local copy of the history was damaged and has been rebuilt from a host. Your notes were not affected.", 20000);
     }
@@ -496,7 +507,8 @@ export default class EncgidianPlugin extends Plugin {
     if (!this.statusEl) return;
     const r = this.lastReport;
     let text: string;
-    if (this.engine?.isRunning) text = "⟳ Syncing…";
+    if (this.progressText) text = `⟳ ${this.progressText}`;
+    else if (this.engine?.isRunning) text = "⟳ Syncing…";
     else if (this.lastError === "locked") text = "🔒 Locked";
     else if (this.lastError) text = "⚠ Sync failed";
     else if (!r) text = "Encrypted sync";
@@ -530,7 +542,7 @@ export default class EncgidianPlugin extends Plugin {
     if (!versions.length) return void new Notice("No synced versions of this note yet.");
     const current = await contentHash(keys, new Uint8Array(await this.app.vault.readBinary(file)));
     new VersionPickModal(this.app, versions, current, async (v) => {
-      const data = await readEntry(this.repo, keys, v.entry);
+      const data = await this.engine.readEntry(keys, v.entry);
       new VersionPreviewModal(
         this.app,
         file.path,
@@ -557,7 +569,7 @@ export default class EncgidianPlugin extends Plugin {
     const files = await deletedFiles(this.repo, keys, head);
     if (!files.length) return void new Notice("No deleted files in the history.");
     new DeletedPickModal(this.app, files, async (f) => {
-      const data = await readEntry(this.repo, keys, f.last.entry);
+      const data = await this.engine.readEntry(keys, f.last.entry);
       const taken = new Set(this.app.vault.getFiles().map((x) => clashKey(x.path)));
       const p = uniqueName(f.path, taken);
       await this.vaultIO.write(p, data, 0);

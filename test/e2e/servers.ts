@@ -12,4 +12,11 @@ for (const [i, s] of servers.entries()) {
   await s.start(47201 + i);
   console.log(`server ${i + 1}: ${s.url()}`);
 }
-setInterval(() => servers.forEach((s, i) => (s.down = fs.existsSync(path.join(root, `s${i + 1}.down`)))), 200);
+// Control files: s1.down takes server 1 down; throttle (containing bytes/second) slows both.
+setInterval(() => {
+  const t = fs.existsSync(path.join(root, "throttle")) ? Number(fs.readFileSync(path.join(root, "throttle"), "utf8")) || 0 : 0;
+  servers.forEach((s, i) => {
+    s.down = fs.existsSync(path.join(root, `s${i + 1}.down`));
+    s.throttle = t;
+  });
+}, 200);

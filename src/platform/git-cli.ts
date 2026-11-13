@@ -10,7 +10,7 @@ import { promises as fsp } from "fs";
 import * as path from "path";
 import { BRANCH } from "../core/format";
 import { Repo } from "../core/repo";
-import { AuthError, authProblem, checkUrlSafety, friendlyNetworkError, ProtectedBranchError, Credentials, Endpoint, isSshUrl, PushRejectedError, scrub, Transport } from "../core/transport";
+import { AuthError, authProblem, checkUrlSafety, friendlyNetworkError, ProtectedBranchError, RefInfo, Credentials, Endpoint, isSshUrl, PushRejectedError, scrub, Transport } from "../core/transport";
 
 export interface CliOptions {
   /** Path to git; default "git". */
@@ -128,16 +128,39 @@ export class CliTransport implements Transport {
     });
   }
 
-  async fetch(ep: Endpoint): Promise<string | null> {
+  async listRefs(ep: Endpoint): Promise<RefInfo[]> {
     const creds = await ep.getCredentials();
     checkUrlSafety(ep.url, !!creds?.password);
-    const out = await this.run(["ls-remote", ep.url, `refs/heads/${BRANCH}`], ep, creds);
-    const line = out.split("\n").find((l) => l.endsWith(`\trefs/heads/${BRANCH}`));
-    if (!line) {
+    const out = await this.run(["ls-remote", ep.url, `refs/heads/${BRANCH}`, "refs/encgidian/*"], ep, creds);
+    return out
+      .split("\n")
+      .map((l) => l.split("\t"))
+      .filter(([oid, ref]) => oid && ref && (ref === `refs/heads/${BRANCH}` || ref.startsWith("refs/encgidian/")))
+      .map(([oid, ref]) => ({ ref, oid }));
+  }
+
+  async fetchRef(ep: Endpoint, ref: string, _have?: string | null): Promise<void> {
+    const creds = await ep.getCredentials();
+    checkUrlSafety(ep.url, !!creds?.password);
+    await this.run(["fetch", "--no-tags", "--no-write-fetch-head", "--quiet", ep.url, `+${ref}:${ref}`], ep, creds);
+  }
+
+  async pushRef(ep: Endpoint, ref: string, oid: string, opts: { force?: boolean } = {}): Promise<void> {
+    const creds = await ep.getCredentials();
+    checkUrlSafety(ep.url, !!creds?.password);
+    await this.run(["push", "--porcelain", "--quiet", ep.url, `${opts.force ? "+" : ""}${oid}:${ref}`], ep, creds);
+  }
+
+  async fetch(ep: Endpoint, listing?: RefInfo[], _have?: string | null): Promise<string | null> {
+    const creds = await ep.getCredentials();
+    checkUrlSafety(ep.url, !!creds?.password);
+    const refs = listing ?? (await this.listRefs(ep));
+    const main = refs.find((r) => r.ref === `refs/heads/${BRANCH}`);
+    if (!main) {
       await this.repo.setRemoteHead(ep.id, null);
       return null;
     }
-    const oid = line.split("\t")[0];
+    const oid = main.oid;
     let have = true;
     try {
       await this.repo.readCommit(oid);

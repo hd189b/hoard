@@ -4,7 +4,7 @@
 
 import git from "isomorphic-git";
 import type { HttpClient } from "isomorphic-git";
-import { BRANCH } from "./format";
+import { BRANCH, LARGE_PREFIX, STEP_PREFIX } from "./format";
 import { Repo } from "./repo";
 
 export interface Credentials {
@@ -50,9 +50,26 @@ export class AuthError extends Error {
   }
 }
 
+export interface RefInfo {
+  ref: string;
+  oid: string;
+}
+
 export interface Transport {
-  /** Fetch the remote branch into refs/remotes/<id>/main. Returns its commit, or null if the remote is empty. */
-  fetch(ep: Endpoint): Promise<string | null>;
+  /** The remote's main branch and its encgidian refs (large objects, steps). */
+  listRefs(ep: Endpoint): Promise<RefInfo[]>;
+  /**
+   * Fetch the remote branch into refs/remotes/<id>/main. Returns its commit, or null if the remote is empty.
+   * Pass `listing` from listRefs to skip listing again.
+   */
+  fetch(ep: Endpoint, listing?: RefInfo[], have?: string | null): Promise<string | null>;
+  /**
+   * Fetch one non-branch ref into the same local ref name. `have` is a commit this
+   * device already has, so the host only sends what is new since then.
+   */
+  fetchRef(ep: Endpoint, ref: string, have?: string | null): Promise<void>;
+  /** Push one non-branch ref. `force` lets a scratch ref move anywhere. */
+  pushRef(ep: Endpoint, ref: string, oid: string, opts?: { force?: boolean }): Promise<void>;
   /**
    * Push local main to the remote. Throws PushRejectedError when the remote moved on.
    * `force` replaces whatever the remote branch holds (only used after the user confirms).
@@ -152,24 +169,93 @@ export class IsoTransport implements Transport {
     if ((await git.getConfig({ ...g, path: `remote.${ep.id}.url` })) !== ep.url) {
       await git.setConfig({ ...g, path: `remote.${ep.id}.url`, value: ep.url });
     }
-    if ((await git.getConfig({ ...g, path: `remote.${ep.id}.fetch` })) !== fetchSpec) {
-      await git.setConfig({ ...g, path: `remote.${ep.id}.fetch`, value: fetchSpec });
-    }
+    // Main maps to a remote-tracking ref; encgidian refs keep their own names locally.
+    const specs = [fetchSpec, "+refs/encgidian/*:refs/encgidian/*"];
+    const have = (await git.getConfigAll({ ...g, path: `remote.${ep.id}.fetch` })) as string[];
+    if (!have.includes(specs[0])) await git.setConfig({ ...g, path: `remote.${ep.id}.fetch`, value: specs[0] });
+    if (!have.includes(specs[1])) await git.setConfig({ ...g, path: `remote.${ep.id}.fetch`, value: specs[1], append: true });
   }
 
-  async fetch(ep: Endpoint): Promise<string | null> {
+  private async withAuth<T>(ep: Endpoint, fn: (hooks: ReturnType<IsoTransport["authHooks"]>, creds?: Credentials) => Promise<T>): Promise<T> {
     const creds = await ep.getCredentials();
     checkUrlSafety(ep.url, !!creds?.password);
     const hooks = this.authHooks(creds);
     await this.ensureRemote(ep);
     try {
-      const refs = await git.listServerRefs({
+      return await fn(hooks, creds);
+    } catch (e) {
+      const out = asError(e, creds);
+      if (hooks.failed && !(out instanceof AuthError)) throw new AuthError();
+      throw out;
+    }
+  }
+
+  async listRefs(ep: Endpoint): Promise<RefInfo[]> {
+    return this.withAuth(ep, async (hooks) => {
+      const refs = await git.listServerRefs({ http: this.http, url: ep.url, onAuth: hooks.onAuth, onAuthFailure: hooks.onAuthFailure, prefix: "refs/" });
+      return refs
+        .filter((r) => r.ref === `refs/heads/${BRANCH}` || r.ref.startsWith("refs/encgidian/"))
+        .map((r) => ({ ref: r.ref, oid: r.oid }));
+    });
+  }
+
+  async fetchRef(ep: Endpoint, ref: string, have?: string | null): Promise<void> {
+    await this.withAuth(ep, async (hooks) => {
+      // isomorphic-git only tells the host about the local ref of the same name,
+      // so point it at a commit we have; otherwise the host sends a full snapshot.
+      if (have && !(await this.repo.resolve(ref))) {
+        await git.writeRef({ fs: this.repo.fs, gitdir: this.repo.gitdir, ref, value: have, force: true });
+      }
+      await git.fetch({
+        fs: this.repo.fs,
+        gitdir: this.repo.gitdir,
         http: this.http,
         url: ep.url,
+        remote: ep.id,
+        ref,
+        remoteRef: ref,
+        singleBranch: true,
+        tags: false,
         onAuth: hooks.onAuth,
         onAuthFailure: hooks.onAuthFailure,
-        prefix: `refs/heads/${BRANCH}`,
       });
+    });
+  }
+
+  async pushRef(ep: Endpoint, ref: string, oid: string, opts: { force?: boolean } = {}): Promise<void> {
+    await this.withAuth(ep, async (hooks, creds) => {
+      if ((await this.repo.resolve(ref)) !== oid) await git.writeRef({ fs: this.repo.fs, gitdir: this.repo.gitdir, ref, value: oid, force: true });
+      const res = await git.push({
+        fs: this.repo.fs,
+        gitdir: this.repo.gitdir,
+        http: this.http,
+        url: ep.url,
+        remote: ep.id,
+        ref,
+        remoteRef: ref,
+        force: !!opts.force,
+        onAuth: hooks.onAuth,
+        onAuthFailure: hooks.onAuthFailure,
+      });
+      if (!res.ok) throw new Error(scrub(res.error ?? `push of ${ref} failed`, creds));
+    });
+  }
+
+  async fetch(ep: Endpoint, listing?: RefInfo[], have?: string | null): Promise<string | null> {
+    const creds = await ep.getCredentials();
+    checkUrlSafety(ep.url, !!creds?.password);
+    const hooks = this.authHooks(creds);
+    await this.ensureRemote(ep);
+    try {
+      const refs =
+        listing ??
+        (await git.listServerRefs({
+          http: this.http,
+          url: ep.url,
+          onAuth: hooks.onAuth,
+          onAuthFailure: hooks.onAuthFailure,
+          prefix: `refs/heads/${BRANCH}`,
+        }));
       const remote = refs.find((r) => r.ref === `refs/heads/${BRANCH}`);
       if (!remote) {
         await this.repo.setRemoteHead(ep.id, null);
@@ -177,13 +263,18 @@ export class IsoTransport implements Transport {
       }
       const known = await this.repo.remoteHead(ep.id);
       if (known !== remote.oid || !(await this.hasCommit(remote.oid))) {
+        // Tell the host about the newest commit we have (e.g. a step just fetched),
+        // not only our own main, so it doesn't resend what we already downloaded.
+        const haveRef = `refs/encgidian/have/${ep.id}`;
+        const best = have ?? (await this.repo.head());
+        if (best) await git.writeRef({ fs: this.repo.fs, gitdir: this.repo.gitdir, ref: haveRef, value: best, force: true });
         await git.fetch({
           fs: this.repo.fs,
           gitdir: this.repo.gitdir,
           http: this.http,
           url: ep.url,
           remote: ep.id,
-          ref: BRANCH,
+          ref: best ? haveRef : BRANCH,
           remoteRef: BRANCH,
           singleBranch: true,
           tags: false,

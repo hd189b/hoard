@@ -16,6 +16,8 @@ export class GitServer {
   requests = 0;
   /** Credentials are right, but the account may not use this repo (like a token without access). */
   forbidden = false;
+  /** Bytes per second to send responses at (0 = full speed), to simulate a slow network. */
+  throttle = 0;
 
   constructor(readonly root: string) {
     mkdirSync(root, { recursive: true });
@@ -109,7 +111,18 @@ export class GitServer {
         else if (k) headers[k] = v;
       }
       res.writeHead(status, headers);
-      res.end(body);
+      if (!this.throttle) return res.end(body);
+      // Drip the response out slowly so a client can be interrupted mid-transfer.
+      const chunk = Math.max(1, Math.floor(this.throttle / 10));
+      let off = 0;
+      const tick = () => {
+        if (res.destroyed) return;
+        if (off >= body.length) return res.end();
+        res.write(body.subarray(off, off + chunk));
+        off += chunk;
+        setTimeout(tick, 100);
+      };
+      tick();
     });
   }
 }

@@ -146,8 +146,9 @@ export async function startServer(reader: VaultReader, port = 0): Promise<{ url:
         case "/api/export": {
           const b = await body(req);
           const dir = path.resolve(b.dir || "");
-          const n = await reader.exportTo(await reader.resolveCommit(b.c), dir);
-          return json(res, 200, { count: n, dir });
+          const skipped: string[] = [];
+          const n = await reader.exportTo(await reader.resolveCommit(b.c), dir, undefined, skipped);
+          return json(res, 200, { count: n, dir, skipped });
         }
       }
       json(res, 404, { error: "not found" });

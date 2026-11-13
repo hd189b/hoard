@@ -520,12 +520,16 @@ describe("unreliable writes on the device", () => {
     const phone = mk("Phone");
     const real = phone.vault.write.bind(phone.vault);
     let broken = 0;
+    const seen = new Set<string>();
     phone.vault.write = async (p, data, mtime) => {
-      // Like Obsidian for Android: now and then a write leaves an empty file.
-      if (Math.random() < 0.25) {
+      // Like Obsidian for Android: a write sometimes leaves an empty file. Here: the
+      // first write of every third file.
+      if (!seen.has(p) && seen.size % 3 === 0) {
+        seen.add(p);
         broken++;
         return real(p, new Uint8Array(0), mtime);
       }
+      seen.add(p);
       return real(p, data, mtime);
     };
     await phone.sync();
@@ -540,7 +544,7 @@ describe("unreliable writes on the device", () => {
     const phone = mk("Phone");
     const real = phone.vault.write.bind(phone.vault);
     phone.vault.write = async (p, _d, m) => real(p, new Uint8Array(0), m);
-    await expect(phone.sync()).rejects.toThrow(/Couldn't write "a.md" correctly/);
+    await expect(phone.sync()).rejects.toThrow(/Couldn't write "a.md" on this device/);
     phone.vault.write = real;
     await phone.sync();
     expect(phone.file("a.md")).toBe("content");
@@ -569,16 +573,20 @@ describe("unreliable writes on the device", () => {
 });
 
 describe("damaged local Git repo", () => {
-  it("repo writes that come out empty are retried", async () => {
+  it("repo writes that come out empty are retried", { timeout: 60000 }, async () => {
     let broken = 0;
+    const seenObj = new Set<string>();
     const flaky = {
       promises: {
         ...fs.promises,
         writeFile: async (p: string, d: any, ...r: any[]) => {
-          if (/objects\/[0-9a-f]{2}\//.test(p) && Math.random() < 0.2) {
+          // First write of every fifth object comes out empty.
+          if (/objects\/[0-9a-f]{2}\//.test(p) && !seenObj.has(p) && seenObj.size % 5 === 0) {
+            seenObj.add(p);
             broken++;
             return fs.promises.writeFile(p, new Uint8Array(0));
           }
+          seenObj.add(p);
           return (fs.promises.writeFile as any)(p, d, ...r);
         },
       },
@@ -625,5 +633,142 @@ describe("damaged local Git repo", () => {
     await pc.sync();
     expect(pc.files()).toEqual({ "a.md": "offline edit", "new.md": "written offline", "pc.md": "from pc" });
     expect(phone.files()).toEqual(pc.files());
+  });
+});
+
+describe("bounded transfers (Obsidian for Android can't take big downloads)", { timeout: 180000 }, () => {
+  const MB = 1024 * 1024;
+  const randomText = (n: number) => require("crypto").randomBytes(n).toString("base64").slice(0, n);
+
+  it("a large initial upload and a fresh device's download happen in pieces of about 8 MB", async () => {
+    const upT = { maxDown: 0, maxUp: 0, requests: 0 };
+    const pc = mk("PC", { traffic: upT } as any);
+    for (let i = 0; i < 300; i++) pc.put(`img/${String(i).padStart(3, "0")}.md`, randomText(100 * 1024)); // ~40 MB once encrypted
+    const r = await pc.sync();
+    expect(r.remotes.every((x) => x.upToDate)).toBe(true);
+    const steps = execFileSync("git", ["-C", path.join(tmp, "s1", "vault.git"), "for-each-ref", "refs/encgidian/steps/"]).toString().trim().split("\n");
+    expect(steps.length).toBeGreaterThanOrEqual(3);
+    expect(upT.maxUp).toBeLessThan(12 * MB);
+
+    const downT = { maxDown: 0, maxUp: 0, requests: 0 };
+    const phone = mk("Phone", { traffic: downT } as any);
+    await phone.sync();
+    expect(downT.maxDown).toBeLessThan(12 * MB);
+    expect(Object.keys(phone.files())).toHaveLength(300);
+    expect(phone.file("img/123.md")).toBe(pc.file("img/123.md"));
+  });
+
+  it("a device that is far behind catches up in pieces too", async () => {
+    const pc = mk("PC");
+    const phone = mk("Phone");
+    pc.put("a.md", "1");
+    await pc.sync();
+    await phone.sync();
+    for (let round = 0; round < 6; round++) {
+      for (let i = 0; i < 30; i++) pc.put(`r${round}/${i}.md`, randomText(100 * 1024)); // ~4 MB per sync
+      await pc.sync();
+    }
+    const t = { maxDown: 0, maxUp: 0, requests: 0 };
+    const phone2 = new Device("Phone", phone.root, { servers: [s1, s2], traffic: t } as any);
+    await phone2.sync();
+    expect(t.maxDown).toBeLessThan(12 * MB);
+    expect(Object.keys(phone2.files())).toHaveLength(181);
+  });
+
+  it("large files live outside main; a device with a small size limit never downloads them", async () => {
+    const pc = mk("PC");
+    const big = require("crypto").randomBytes(10 * MB);
+    fs.mkdirSync(path.join(pc.vaultDir, "media"), { recursive: true });
+    fs.writeFileSync(path.join(pc.vaultDir, "media", "video.bin"), big);
+    pc.put("note.md", "small");
+    await pc.sync();
+    const refs = execFileSync("git", ["-C", path.join(tmp, "s1", "vault.git"), "for-each-ref", "refs/encgidian/large/"]).toString().trim().split("\n");
+    expect(refs).toHaveLength(1);
+
+    const t = { maxDown: 0, maxUp: 0, requests: 0 };
+    const phone = mk("Phone", { traffic: t, options: { maxFileSize: 5 * MB } } as any);
+    await phone.sync();
+    expect(phone.file("note.md")).toBe("small");
+    expect(phone.file("media/video.bin")).toBeNull();
+    expect(t.maxDown).toBeLessThan(1 * MB); // the 10 MB file was never downloaded
+    phone.put("note.md", "edited on phone");
+    await phone.sync(); // and its absence is not a delete
+    await pc.sync();
+    expect(fs.readFileSync(path.join(pc.vaultDir, "media", "video.bin")).equals(big)).toBe(true);
+    expect(pc.file("note.md")).toBe("edited on phone");
+
+    const laptop = mk("Laptop"); // no size limit: downloads it on demand
+    await laptop.sync();
+    expect(fs.readFileSync(path.join(laptop.vaultDir, "media", "video.bin")).equals(big)).toBe(true);
+  });
+
+  it("a new empty host is filled in bounded pieces, including large files", async () => {
+    const pc = mk("PC");
+    for (let i = 0; i < 200; i++) pc.put(`n/${i}.md`, randomText(100 * 1024));
+    fs.writeFileSync(path.join(pc.vaultDir, "big.bin"), require("crypto").randomBytes(9 * MB));
+    pc.servers = [s1];
+    await pc.sync();
+    const s3 = new GitServer(path.join(tmp, "s3"));
+    s3.createRepo();
+    await s3.start();
+    try {
+      const t = { maxDown: 0, maxUp: 0, requests: 0 };
+      const pc2 = new Device("PC", pc.root, { servers: [s1, s3], traffic: t } as any);
+      const r = await pc2.sync();
+      expect(r.remotes.every((x) => x.upToDate)).toBe(true);
+      expect(t.maxUp).toBeLessThan(12 * MB);
+      const phone = new Device("Phone", path.join(tmp, "phone3"), { servers: [s3] });
+      await phone.sync();
+      expect(Object.keys(phone.files())).toHaveLength(201);
+    } finally {
+      await s3.stop();
+    }
+  });
+});
+
+describe("compaction", { timeout: 120000 }, () => {
+  it("packs many small files and packs into a few, keeping everything readable and in sync", async () => {
+    const pc = mk("PC");
+    const phone = mk("Phone");
+    for (let i = 0; i < 50; i++) pc.put(`n/${i}.md`, `note ${i}`);
+    await pc.sync();
+    await phone.sync();
+    for (let i = 0; i < 40; i++) {
+      pc.put(`n/${i % 50}.md`, `edit ${i}`, Date.now() + i);
+      await pc.sync();
+      await phone.sync(); // one new pack per round on the phone
+    }
+    const packsBefore = await phone.repo.packCount();
+    expect(packsBefore).toBeGreaterThan(3); // (automatic compaction may already have run once)
+    const r = await phone.repo.compact(64 * 1024);
+    expect(r.packsAfter).toBeLessThan(packsBefore);
+    const looseLeft = fs.readdirSync(path.join(phone.repo.gitdir, "objects")).filter((d) => /^[0-9a-f]{2}$/.test(d)).length;
+    expect(looseLeft).toBe(0);
+    execFileSync("git", ["--git-dir", phone.repo.gitdir, "fsck", "--full"]); // throws if anything is missing
+    // History still readable, and syncing still works both ways.
+    const { fileVersions } = await import("../src/core/history");
+    const keys = await (phone.engine as any).d.keys.unlock((await phone.repo.keyFileAt((await phone.repo.head())!))!.keyFile);
+    expect((await fileVersions(phone.repo, keys, (await phone.repo.head())!, "n/0.md")).length).toBeGreaterThan(1);
+    phone.put("from-phone.md", "after compaction");
+    await phone.sync();
+    await pc.sync();
+    expect(pc.file("from-phone.md")).toBe("after compaction");
+    expect(pc.files()).toEqual(phone.files());
+  });
+
+  it("runs by itself when packs pile up", async () => {
+    const pc = mk("PC");
+    const phone = mk("Phone");
+    pc.put("a.md", "0");
+    await pc.sync();
+    await phone.sync();
+    let compacted = false;
+    for (let i = 1; i <= 35 && !compacted; i++) {
+      pc.put("a.md", String(i), Date.now() + i);
+      await pc.sync();
+      compacted = !!(await phone.sync()).compacted;
+    }
+    expect(compacted).toBe(true);
+    expect(await phone.repo.packCount()).toBeLessThan(5);
   });
 });

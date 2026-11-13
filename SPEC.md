@@ -124,6 +124,20 @@ needs a new vault key and a full re-encrypt; that is out of scope for v1.
 - No delete markers are needed: a delete is "in the base, missing on
   one side", and the base comes from Git history.
 
+### Transfer limits (phones)
+Obsidian for Android crashes on single downloads much above ~20 MB, so:
+- Files whose encrypted form exceeds 8 MB are stored outside the main history,
+  each under `refs/encgidian/large/<blob id>`; the manifest marks them. A device
+  downloads one only when it needs it and its size limit allows it.
+- When a sync adds more than ~8 MB, it is split into several commits; these and
+  every ~8 MB of accumulated history are marked `refs/encgidian/steps/…`, which
+  devices fetch one at a time before fetching `main`.
+- Each device uploads through its own `refs/encgidian/upload/<id>` so pushes
+  are bounded too. Phones default to a 10 MB file-size limit.
+- The local repo is compacted (packed into ≤ 8 MB packs) every 200 syncs or
+  when 30 packs pile up.
+- The decrypter needs `git clone --mirror` to include large files.
+
 ### Local repository
 Each device keeps a bare Git repo (objects and refs only, no checkout
 of encrypted files) in the plugin's folder:

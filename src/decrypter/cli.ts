@@ -19,7 +19,8 @@ Usage:
   encgidian-decrypt export REPO DIR [--at SYNC]
                                                write every file of a sync to DIR
 
-REPO is a clone of any of your Git hosts (git clone URL), normal or bare.
+REPO is a clone of any of your Git hosts. Use "git clone --mirror URL" so
+large files (stored outside the main history) are included too.
 SYNC is a sync id (or its first characters) from "syncs".
 
 The password is asked for interactively. For scripts, set ENCGIDIAN_PASSWORD
@@ -155,7 +156,8 @@ export async function main(argv: string[]): Promise<number> {
         if (!(n >= 1 && n <= vs.length)) throw new ReaderError(`Version must be 1..${vs.length}`);
         data = await r.readObject(vs[n - 1].entry);
       } else data = (await r.read(await r.resolveCommit(at), p)).data;
-      process.stdout.write(data);
+      // Wait until the data is handed over; a pipe takes it in chunks.
+      await new Promise<void>((resolve, reject) => process.stdout.write(data, (e) => (e ? reject(e) : resolve())));
       return 0;
     }
     case "deleted": {
@@ -166,8 +168,13 @@ export async function main(argv: string[]): Promise<number> {
       const dir = pos.shift();
       if (!dir) throw new ReaderError("export needs a target folder");
       if (fs.existsSync(dir) && fs.readdirSync(dir).length) throw new ReaderError(`${dir} is not empty; choose an empty or new folder`);
-      const n = await r.exportTo(await r.resolveCommit(at), dir);
+      const skipped: string[] = [];
+      const n = await r.exportTo(await r.resolveCommit(at), dir, undefined, skipped);
       out(`Exported ${n} files to ${dir}`);
+      if (skipped.length) {
+        out(`Skipped ${skipped.length} large file(s) this clone doesn't include (use "git clone --mirror" to get them):`);
+        for (const p of skipped) out(`  ${p}`);
+      }
       return 0;
     }
   }

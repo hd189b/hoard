@@ -241,7 +241,7 @@ $("exportBtn").onclick = async () => {
   if (!dir) return;
   try {
     const r = await (await api("/api/export", { method: "POST", body: JSON.stringify({ c: $("snap").value, dir }) })).json();
-    alert("Exported " + r.count + " files to " + r.dir);
+    alert("Exported " + r.count + " files to " + r.dir + (r.skipped && r.skipped.length ? "\n\nSkipped " + r.skipped.length + " large file(s) this clone doesn't include. Clone with git clone --mirror to get them." : ""));
   } catch (e) { alert("Export failed: " + e.message); }
 };
 

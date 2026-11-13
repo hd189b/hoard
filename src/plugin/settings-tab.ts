@@ -127,7 +127,10 @@ export class EncgidianSettingTab extends PluginSettingTab {
       );
     new Setting(el)
       .setName("Maximum file size (MB)")
-      .setDesc("Bigger files are left out on this device. 0 means no limit.")
+      .setDesc(
+        "Bigger files are left out on this device (they stay on the hosts). 0 means no limit." +
+          (Platform.isMobile ? " On phones keep this at 10 MB or less: Obsidian for Android can crash on bigger downloads." : ""),
+      )
       .addText((t) =>
         t.setValue(String(s.maxFileSizeMB)).onChange(async (v) => {
           s.maxFileSizeMB = Math.max(0, Number(v) || 0);

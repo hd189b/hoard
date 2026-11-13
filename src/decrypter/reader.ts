@@ -93,15 +93,22 @@ export class VaultReader {
   async read(commit: string, p: string): Promise<{ data: Uint8Array; mtime: number }> {
     const e = (await this.snapshot(commit)).get(normalizePath(p));
     if (!e) throw new ReaderError(`"${p}" isn't in that sync`);
-    return { data: await readEntry(this.repo, this.k(), e), mtime: e.t };
+    return { data: await this.readObject(e), mtime: e.t };
   }
 
+  /** Decrypt one entry. Large files live under their own refs, which a plain clone doesn't download. */
   async readObject(e: Version["entry"]): Promise<Uint8Array> {
+    if (e.L && !(await this.repo.hasObject(e.o))) {
+      throw new ReaderError(
+        `"${e.p}" is a large file stored outside the main history, and this clone doesn't include it. ` +
+          `Clone with "git clone --mirror <url>" to get large files too.`,
+      );
+    }
     return readEntry(this.repo, this.k(), e);
   }
 
   /** Write every file of a snapshot under `out`. Refuses to write outside it. */
-  async exportTo(commit: string, out: string, onFile?: (p: string) => void): Promise<number> {
+  async exportTo(commit: string, out: string, onFile?: (p: string) => void, skipped: string[] = []): Promise<number> {
     const root = path.resolve(out);
     const m = await this.snapshot(commit);
     let n = 0;
@@ -109,6 +116,10 @@ export class VaultReader {
       const dest = path.resolve(root, ...p.split("/"));
       if (!dest.startsWith(root + path.sep)) throw new ReaderError(`Unsafe path in vault: ${p}`);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (e.L && !(await this.repo.hasObject(e.o))) {
+        skipped.push(p);
+        continue;
+      }
       fs.writeFileSync(dest, await readEntry(this.repo, this.k(), e));
       if (e.t > 0) fs.utimesSync(dest, new Date(), new Date(e.t));
       onFile?.(p);

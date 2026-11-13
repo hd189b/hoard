@@ -9,7 +9,7 @@ is in [SPEC.md](SPEC.md).
 
 ```bash
 npm install
-npm test                 # 75 tests: two devices, real Git servers, SSH, proxies
+npm test                 # 86 tests: two devices, real Git servers, SSH, proxies
 npm run build            # plugin -> dist/plugin/{main.js,manifest.json}
 npm run build:decrypter  # dist/decrypter/encgidian-decrypt(.exe)
 ```
@@ -36,13 +36,23 @@ Settings (hosts, sign-ins, device name) are per device; secrets never leave the 
 ## Standalone decrypter
 
 ```bash
-git clone <any of your hosts> vault-backup
+git clone --mirror <any of your hosts> vault-backup   # --mirror also fetches large files
 ./encgidian-decrypt vault-backup               # opens a browser interface on 127.0.0.1
 ./encgidian-decrypt history vault-backup Notes/Plan.md
 ./encgidian-decrypt export vault-backup ~/restored --at <sync id>
 ```
 
 Read-only; accepts the password or the recovery key. `--help` lists all commands.
+
+## Phones and big vaults
+
+Obsidian for Android crashes when a single download is much above ~20 MB, so the
+plugin keeps every transfer to about 8 MB: large syncs are split into "step"
+commits that devices download one at a time, and files over 8 MB are stored
+outside the main history (their own Git ref), downloaded only by devices whose
+size limit allows them. Phones default to a 10 MB limit. The local repo is
+compacted automatically every 200 syncs or when 30 packs pile up (shown as
+"Tidying up local history…"; about 1.5 minutes on a phone with 14,000 objects).
 
 ## Tested vs. not yet tested
 
@@ -87,6 +97,12 @@ local repo rebuilds itself from a host. Also: secret ids over Obsidian's
 mistaken for GNOME Keyring, missing KWallet entries treated as errors, vague
 sign-in errors (now: wrong token vs. token without access to the repo).
 
-Not yet tested: a physical Android phone, Windows (SSH askpass, Git Credential
-Manager, `connect.exe` proxy), KeePassXC, and Sign in with GitHub (needs your
-OAuth client ID).
+Stress-tested on the Android emulator: Obsidian killed mid-download, mid-write
+and mid-upload (each recovered on the next sync, repo intact, no data lost); a
+6,400-note vault with 4–20 MB files; 400 syncs of history; compaction.
+Windows was simulated on Linux (case-insensitive NTFS behaviour, locked files,
+Windows paths in SSH/proxy commands).
+
+Not yet tested: a physical Android phone, real Windows (Obsidian, Git for
+Windows' askpass and `connect.exe`, DPAPI secret storage, the `.exe` decrypter),
+KeePassXC, and Sign in with GitHub (needs your OAuth client ID).

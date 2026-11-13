@@ -8,6 +8,7 @@ import { createKeyFile, KeyFile, unlockWithPassword, VaultKeys } from "../../src
 import { Credentials, Endpoint, IsoTransport, Transport } from "../../src/core/transport";
 import { makeNodeHttp } from "../../src/platform/http-node";
 import { FolderVault, JsonFileState } from "../../src/platform/vault-node";
+import { NtfsVault } from "./ntfs";
 export interface Server {
   url(): string;
 }
@@ -23,6 +24,10 @@ export interface DeviceOpts {
   transport?: (repo: Repo, ep: Endpoint) => Transport;
   /** File system for the device's Git repo (default: Node's fs). */
   repoFs?: unknown;
+  /** Use a simulated Windows (NTFS, case-insensitive) vault folder. */
+  ntfs?: boolean;
+  /** Record the size of every HTTP request and response body. */
+  traffic?: { maxDown: number; maxUp: number; requests: number };
 }
 
 export class Device {
@@ -46,7 +51,7 @@ export class Device {
     this.password = o.password ?? "pw";
     this.servers = o.servers;
     this.repo = new Repo(o.repoFs ?? fs, path.join(root, "repo"));
-    this.vault = new FolderVault(this.vaultDir);
+    this.vault = o.ntfs ? new NtfsVault(this.vaultDir) : new FolderVault(this.vaultDir);
     this.options = {
       device: name,
       configDir: ".obsidian",
@@ -56,7 +61,31 @@ export class Device {
       maxFileSize: 0,
       ...o.options,
     };
-    const http = makeNodeHttp({ proxy: o.proxy, timeoutMs: 5000 });
+    const base = makeNodeHttp({ proxy: o.proxy, timeoutMs: 20000 });
+    const tr = o.traffic;
+    const http = tr
+      ? {
+          async request(r: any) {
+            let up = 0;
+            const chunks: Uint8Array[] = [];
+            if (r.body) for await (const c of r.body) (chunks.push(c), (up += c.length));
+            async function* again() {
+              for (const c of chunks) yield c;
+            }
+            const res = await base.request({ ...r, body: r.body ? again() : undefined });
+            const parts: Uint8Array[] = [];
+            let down = 0;
+            for await (const c of res.body!) (parts.push(c), (down += c.length));
+            tr.requests++;
+            tr.maxUp = Math.max(tr.maxUp, up);
+            tr.maxDown = Math.max(tr.maxDown, down);
+            async function* out() {
+              for (const c of parts) yield c;
+            }
+            return { ...res, body: out() };
+          },
+        }
+      : base;
     const iso = new IsoTransport(this.repo, http);
     this.engine = new SyncEngine({
       repo: this.repo,
